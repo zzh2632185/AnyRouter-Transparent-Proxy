@@ -48,7 +48,6 @@ app = FastAPI(
 
 # ===== 基础配置 =====
 # 主站：https://anyrouter.top
-# 备用：https://q.quuvv.cn
 load_dotenv()
 TARGET_BASE_URL = os.getenv("API_BASE_URL", "https://anyrouter.top")
 print(f"Base Url: {TARGET_BASE_URL}")
@@ -213,6 +212,20 @@ def process_request_body(body: bytes) -> bytes:
     except Exception as e:
         print(f"[System Replacement] Failed to serialize modified JSON: {e}, keeping original body")
         return body
+
+
+# ===== 健康检查端点 =====
+
+@app.get("/health")
+async def health_check():
+    """
+    健康检查端点，用于容器健康检查和服务状态监控
+    不依赖上游服务，仅检查代理服务本身是否正常运行
+    """
+    return {
+        "status": "healthy",
+        "service": "anthropic-transparent-proxy"
+    }
 
 
 # ===== 主代理逻辑 =====
