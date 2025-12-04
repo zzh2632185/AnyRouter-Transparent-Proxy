@@ -18,6 +18,19 @@ async def lifespan(_: FastAPI):
     """Manage application lifespan events"""
     global http_client
 
+    # 输出应用配置信息（只在 worker 进程启动时输出一次）
+    print("=" * 60)
+    print("Application Configuration:")
+    print(f"  Base URL: {TARGET_BASE_URL}")
+    print(f"  System Prompt Replacement: {SYSTEM_PROMPT_REPLACEMENT}")
+    print(f"  Server Port: {PORT}")
+    print(f"  Custom Headers: {len(CUSTOM_HEADERS)} headers loaded")
+    if CUSTOM_HEADERS:
+        print(f"  Custom Headers Keys: {list(CUSTOM_HEADERS.keys())}")
+    print(f"  Debug Mode: {DEBUG_MODE}")
+    print(f"  Hot Reload: {DEBUG_MODE}")
+    print("=" * 60)
+
     # 读取代理配置
     http_proxy = os.getenv("HTTP_PROXY")
     https_proxy = os.getenv("HTTPS_PROXY")
@@ -58,23 +71,17 @@ async def lifespan(_: FastAPI):
         print(f"Failed to initialize HTTP client: {e}")
         raise
 
+    print("=" * 60)
+
     yield
 
     # Shutdown: Close HTTP client
     await http_client.aclose()
 
-
-app = FastAPI(
-    title="Anthropic Transparent Proxy",
-    version="1.1",
-    lifespan=lifespan
-)
-
 # ===== 基础配置 =====
 # 主站：https://anyrouter.top
 load_dotenv()
 TARGET_BASE_URL = os.getenv("API_BASE_URL", "https://anyrouter.top")
-print(f"Base Url: {TARGET_BASE_URL}")
 PRESERVE_HOST = False  # 是否保留原始 Host
 
 # System prompt 替换配置
@@ -82,16 +89,18 @@ PRESERVE_HOST = False  # 是否保留原始 Host
 # 设置为 None 则保持原样不修改
 # 通过环境变量 SYSTEM_PROMPT_REPLACEMENT 配置，默认为 None
 SYSTEM_PROMPT_REPLACEMENT = os.getenv("SYSTEM_PROMPT_REPLACEMENT")  # 例如: "你是一个有用的AI助手"
-print(f"System prompt replacement: {SYSTEM_PROMPT_REPLACEMENT}")
 
 # 调试模式配置
 DEBUG_MODE = os.getenv("DEBUG_MODE", "false").lower() in ("true", "1", "yes")
-print(f"Debug mode: {DEBUG_MODE}")
 
 # 服务端口配置
 PORT = int(os.getenv("PORT", "8088"))
-print(f"Server port: {PORT}")
 
+app = FastAPI(
+    title="Anthropic Transparent Proxy",
+    version="1.1",
+    lifespan=lifespan
+)
 
 # 自定义 Header 配置
 # 从 env/.env.headers.json 文件加载，如果文件不存在或解析失败，则使用空字典 {}
@@ -354,4 +363,5 @@ async def proxy(path: str, request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app:app", host="0.0.0.0", port=PORT, reload=True)
+    # 开发模式启用热重载，生产模式禁用（通过 DEBUG_MODE 环境变量控制）
+    uvicorn.run("app:app", host="0.0.0.0", port=PORT, reload=DEBUG_MODE)
