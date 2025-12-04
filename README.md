@@ -191,15 +191,15 @@ proxy() 捕获路由
     ↓
 filter_request_headers() 过滤请求头
     ↓
-process_request_body() 处理请求体（可选替换 system prompt）
+process_request_body() 处理请求体(可选替换 system prompt)
     ↓
 重写 Host 头 + 注入自定义头 + 添加 X-Forwarded-For
     ↓
-httpx.AsyncClient 发起上游请求
+httpx.AsyncClient 通过 build_request() + send(stream=True) 发起上游请求
     ↓
 filter_response_headers() 过滤响应头
     ↓
-StreamingResponse 流式返回给客户端
+StreamingResponse 流式返回给客户端,使用 BackgroundTask 自动关闭连接
 ```
 
 ### 关键技术
@@ -207,9 +207,9 @@ StreamingResponse 流式返回给客户端
 - **路由处理** - `@app.api_route("/{path:path}")` 捕获所有路径和 HTTP 方法
 - **生命周期管理** - 使用 FastAPI lifespan 事件管理 HTTP 客户端生命周期
 - **连接池复用** - 全局共享 `httpx.AsyncClient` 实现连接复用
-- **异步请求** - 60 秒超时，支持长时间流式响应
-- **流式传输** - `StreamingResponse` + `aiter_bytes()` 高效处理大载荷
-- **头部过滤** - 符合 RFC 7230 规范，双向过滤 hop-by-hop 头部
+- **异步请求** - 60 秒超时,支持长时间流式响应
+- **流式传输** - `build_request()` + `send(stream=True)` + `aiter_bytes()` + `BackgroundTask` 高效处理大载荷,自动管理连接生命周期
+- **头部过滤** - 符合 RFC 7230 规范,双向过滤 hop-by-hop 头部
 
 ### 技术细节
 

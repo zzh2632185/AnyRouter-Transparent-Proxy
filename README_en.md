@@ -195,11 +195,11 @@ process_request_body() processes request body (optional system prompt replacemen
     ↓
 Rewrite Host header + Inject custom headers + Add X-Forwarded-For
     ↓
-httpx.AsyncClient initiates upstream request
+httpx.AsyncClient initiates upstream request via build_request() + send(stream=True)
     ↓
 filter_response_headers() filters response headers
     ↓
-StreamingResponse streams back to client
+StreamingResponse streams back to client with BackgroundTask for automatic connection cleanup
 ```
 
 ### Key Technologies
@@ -208,7 +208,7 @@ StreamingResponse streams back to client
 - **Lifecycle Management** - Uses FastAPI lifespan events to manage HTTP client lifecycle
 - **Connection Pool Reuse** - Globally shared `httpx.AsyncClient` for connection reuse
 - **Asynchronous Requests** - 60-second timeout, supports long-running streaming responses
-- **Streaming Transfer** - `StreamingResponse` + `aiter_bytes()` efficiently handles large payloads
+- **Streaming Transfer** - `build_request()` + `send(stream=True)` + `aiter_bytes()` + `BackgroundTask` efficiently handles large payloads with automatic connection lifecycle management
 - **Header Filtering** - RFC 7230 compliant, bidirectional filtering of hop-by-hop headers
 
 ### Technical Details

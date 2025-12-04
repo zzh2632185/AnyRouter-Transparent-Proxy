@@ -52,14 +52,14 @@ The proxy will start on `http://0.0.0.0:8080` by default.
 ## Code Structure
 
 **Request Flow:**
-1. `proxy()` function (line 58) catches all routes via `/{path:path}`
-2. Constructs target URL by combining `TARGET_BASE` with incoming path and query
-3. `filter_request_headers()` (line 35) strips hop-by-hop headers
+1. `proxy()` function (line 264) catches all routes via `/{path:path}`
+2. Constructs target URL by combining `TARGET_BASE_URL` with incoming path and query
+3. `filter_request_headers()` (line 154) strips hop-by-hop headers
 4. Host header is set to target domain unless `PRESERVE_HOST=True`
 5. Custom headers are injected, X-Forwarded-For is appended
-6. Upstream request sent via `httpx.AsyncClient` with 60s timeout
-7. `filter_response_headers()` (line 47) strips hop-by-hop headers from response
-8. Response streamed back to client via `StreamingResponse` with `aiter_bytes()`
+6. Upstream request built via `http_client.build_request()` then sent with `send(stream=True)`
+7. `filter_response_headers()` (line 170) strips hop-by-hop headers from response
+8. Response streamed back to client via `StreamingResponse` with `aiter_bytes()` and `BackgroundTask` for connection cleanup
 
 **Header Handling:**
 - Hop-by-hop headers are filtered in both directions per RFC 7230
@@ -72,4 +72,6 @@ The proxy will start on `http://0.0.0.0:8080` by default.
 - The proxy does not follow redirects (`follow_redirects=False`)
 - Request timeout is set to 60 seconds
 - All responses are streamed to handle large payloads efficiently
-- Body content is logged to console (line 68) for debugging
+- Uses `http_client.send(stream=True)` with `BackgroundTask` for proper connection lifecycle management
+- Connection is kept alive during streaming and closed automatically after response completes
+- Body content is logged to console for debugging (controlled by `DEBUG_MODE`)

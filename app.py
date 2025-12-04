@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import StreamingResponse
 from contextlib import asynccontextmanager
+from starlette.background import BackgroundTask
 from dotenv import load_dotenv
 import httpx
 import json
@@ -304,28 +305,46 @@ async def proxy(path: str, request: Request):
         existing = forward_headers.get("X-Forwarded-For")
         forward_headers["X-Forwarded-For"] = f"{existing}, {client_host}" if existing else client_host
 
-    # 发起上游请求
+    # 发起上游请求并流式处理响应
     try:
-        resp = await http_client.request(
+        # 构建请求但不使用 context manager
+        req = http_client.build_request(
             method=request.method,
             url=target_url,
             headers=forward_headers,
             content=body,
         )
+
+        # 发送请求并开启流式模式 (不使用 async with)
+        resp = await http_client.send(req, stream=True)
+
+        # 过滤响应头
+        response_headers = filter_response_headers(resp.headers.items())
+
+        # 异步生成器:流式读取响应内容
+        async def iter_response():
+            try:
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+            except Exception as e:
+                # 优雅处理客户端断开连接
+                if DEBUG_MODE:
+                    print(f"[Stream Error] {e}")
+                # 静默处理,避免日志污染
+            finally:
+                # 确保资源被释放 (作为备份,主要由 BackgroundTask 处理)
+                pass
+
+        # 使用 BackgroundTask 在响应完成后关闭连接
+        return StreamingResponse(
+            iter_response(),
+            status_code=resp.status_code,
+            headers=response_headers,
+            background=BackgroundTask(resp.aclose),  # FastAPI 负责在合适时机关闭
+        )
+
     except httpx.RequestError as e:
         return Response(content=f"Upstream request failed: {e}", status_code=502)
-
-    response_headers = filter_response_headers(resp.headers.items())
-
-    async def iter_response():
-        async for chunk in resp.aiter_bytes():
-            yield chunk
-
-    return StreamingResponse(
-        iter_response(),
-        status_code=resp.status_code,
-        headers=response_headers,
-    )
 
 
 if __name__ == "__main__":
