@@ -186,6 +186,14 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
+# NodeJS
+node_modules/
+
 # !CLAUDE.md
 # !AGENT.md
 # !README*.md
+# Claude Code 个人配置
+.claude/
+
+# Spec Workflow 审批临时数据
+.spec-workflow/approvals/
