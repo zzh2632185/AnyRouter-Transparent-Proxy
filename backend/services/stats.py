@@ -59,7 +59,7 @@ async def record_request_start(path: str, method: str, bytes_sent: int) -> str:
     return request_id
 
 
-async def record_request_success(request_id: str, path: str, bytes_received: int, response_time: float):
+async def record_request_success(request_id: str, path: str, method: str, bytes_received: int, response_time: float):
     """记录成功请求"""
     async with stats_lock:
         request_stats["successful_requests"] += 1
@@ -74,6 +74,7 @@ async def record_request_success(request_id: str, path: str, bytes_received: int
         recent_requests.append({
             "request_id": request_id,
             "path": path,
+            "method": method,
             "status": "success",
             "bytes": bytes_received,
             "response_time": response_time,
@@ -81,7 +82,7 @@ async def record_request_success(request_id: str, path: str, bytes_received: int
         })
 
 
-async def record_request_error(request_id: str, path: str, error_msg: str, response_time: float = 0):
+async def record_request_error(request_id: str, path: str, method: str, error_msg: str, response_time: float = 0):
     """记录请求错误"""
     async with stats_lock:
         request_stats["failed_requests"] += 1
@@ -100,6 +101,7 @@ async def record_request_error(request_id: str, path: str, error_msg: str, respo
         recent_requests.append({
             "request_id": request_id,
             "path": path,
+            "method": method,
             "status": "error",
             "error": error_msg,
             "response_time": response_time,

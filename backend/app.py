@@ -261,7 +261,7 @@ async def proxy(path: str, request: Request):
             await resp.aclose()
             if request_id:
                 if resp.status_code < 400:
-                    await record_request_success(request_id, path, bytes_received, response_time)
+                    await record_request_success(request_id, path, request.method, bytes_received, response_time)
                     await broadcast_log_message(
                         "INFO",
                         f"Request completed: {request.method} {path} - {resp.status_code} ({bytes_received} bytes, {response_time*1000:.1f}ms)",
@@ -270,7 +270,7 @@ async def proxy(path: str, request: Request):
                     )
                 else:
                     await record_request_error(
-                        request_id, path,
+                        request_id, path, request.method,
                         f"HTTP {resp.status_code}: {resp.reason_phrase}",
                         response_time
                     )
@@ -292,7 +292,7 @@ async def proxy(path: str, request: Request):
     except httpx.RequestError as e:
         # 记录请求错误
         if request_id:
-            await record_request_error(request_id, path, str(e), time.time() - start_time)
+            await record_request_error(request_id, path, request.method, str(e), time.time() - start_time)
             await broadcast_log_message(
                 "ERROR",
                 f"Upstream request failed: {request.method} {path} - {str(e)}",

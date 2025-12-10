@@ -40,10 +40,12 @@ export interface SystemStats {
   recent_requests: Array<{
     request_id: string
     path: string
+    method: string
     status: string
     bytes?: number
     response_time: number
     timestamp: number
+    error?: string
   }>
 }
 
