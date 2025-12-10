@@ -146,14 +146,14 @@
                 ]"
               >
               <div class="flex items-center justify-between">
-                <div class="flex items-center space-x-3">
+                <div class="flex items-center space-x-3 min-w-0">
                   <div
                     :class="[
                       'w-2 h-2 rounded-full',
                       request.status === 'success' ? 'bg-green-500' : 'bg-red-500'
                     ]"
                   />
-                  <div class="flex items-center space-x-2">
+                  <div class="flex items-center space-x-2 min-w-0">
                     <span
                       :class="[
                         'inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold',
@@ -162,11 +162,11 @@
                     >
                       {{ request.method.toUpperCase() }}
                     </span>
-                    <div>
-                      <p class="text-sm font-medium text-gray-900 dark:text-white">
+                    <div class="min-w-0">
+                      <p class="text-sm font-medium text-gray-900 dark:text-white break-all" :title="formatPath(request.path)">
                         {{ formatPath(request.path) }}
                       </p>
-                      <p class="text-xs text-gray-500 dark:text-gray-400">
+                      <p class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                         {{ formatTime(request.timestamp) }}
                       </p>
                     </div>
@@ -221,9 +221,9 @@
                 class="p-3 rounded-lg bg-red-50 dark:bg-red-900/20"
               >
                 <div class="flex items-center justify-between">
-                  <div class="flex items-center space-x-3">
-                    <div class="w-2 h-2 rounded-full bg-red-500" />
-                    <div class="flex items-center space-x-2">
+                <div class="flex items-center space-x-3 min-w-0">
+                  <div class="w-2 h-2 rounded-full bg-red-500" />
+                    <div class="flex items-center space-x-2 min-w-0">
                       <span
                         :class="[
                           'inline-flex items-center px-2 py-0.5 rounded text-xs font-semibold',
@@ -232,11 +232,11 @@
                       >
                         {{ request.method.toUpperCase() }}
                       </span>
-                      <div>
-                        <p class="text-sm font-medium text-gray-900 dark:text-white">
+                      <div class="min-w-0">
+                        <p class="text-sm font-medium text-gray-900 dark:text-white break-all" :title="formatPath(request.path)">
                           {{ formatPath(request.path) }}
                         </p>
-                        <p class="text-xs text-gray-500 dark:text-gray-400">
+                        <p class="text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap">
                           {{ formatTime(request.timestamp) }}
                         </p>
                       </div>
