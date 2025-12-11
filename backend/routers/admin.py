@@ -8,6 +8,7 @@ import asyncio
 import json
 import os
 import time
+import mimetypes
 from datetime import datetime
 from typing import Optional
 
@@ -120,18 +121,13 @@ async def admin_static(path: str = ""):
 
     # 返回文件内容
     try:
-        with open(file_path, 'r', encoding='utf-8') as f:
+        # 二进制读取，避免图片/图标被错误解码
+        with open(file_path, 'rb') as f:
             content = f.read()
 
-        # 根据文件扩展名设置 Content-Type
-        if file_path.endswith('.html'):
-            return Response(content=content, media_type="text/html")
-        elif file_path.endswith('.css'):
-            return Response(content=content, media_type="text/css")
-        elif file_path.endswith('.js'):
-            return Response(content=content, media_type="application/javascript")
-        else:
-            return Response(content=content)
+        # 猜测 MIME 类型，保证图标与二进制资源的正确 Content-Type
+        mime_type, _ = mimetypes.guess_type(file_path)
+        return Response(content=content, media_type=mime_type or "application/octet-stream")
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading file: {e}")
