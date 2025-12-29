@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, nextTick } from 'vue'
 import { configApi } from '@/services/api'
-import type { SystemConfig, ConfigEntry, ConfigMetadata, ConfigUpdateRequest } from '@/types'
+import type { SystemConfig, ConfigEntry, ConfigMetadata, ConfigUpdateRequest, ConfigUpdateResponse } from '@/types'
 
 // 主题存储
 export const useThemeStore = defineStore('theme', () => {
@@ -307,7 +307,7 @@ export const useConfigStore = defineStore('config', () => {
   }
 
   // 方法：保存配置
-  const saveConfig = async () => {
+  const saveConfig = async (): Promise<ConfigUpdateResponse | false> => {
     if (!canSave.value) {
       if (!hasChanges.value) {
         error.value = '没有需要保存的更改'
@@ -325,6 +325,7 @@ export const useConfigStore = defineStore('config', () => {
     isSaving.value = true
     error.value = null
     requiresRestart.value = false
+    showRestartConfirm.value = false
 
     try {
       // 构建更新请求（仅包含可编辑且已更改的字段）
@@ -350,13 +351,17 @@ export const useConfigStore = defineStore('config', () => {
       lastUpdated.value = Date.now()
 
       // 检查是否需要重启
+      const restartScheduled = response.restart_scheduled === true
       const needsRestart = changed.some(e => {
         const meta = e.metadata ?? metadataMap.value[e.key]
         return meta?.requires_restart
       })
-      if (needsRestart) {
+      if (needsRestart && !restartScheduled) {
         requiresRestart.value = true
         showRestartConfirm.value = true
+      } else {
+        requiresRestart.value = false
+        showRestartConfirm.value = false
       }
 
       // 退出编辑模式
@@ -367,7 +372,7 @@ export const useConfigStore = defineStore('config', () => {
       const authStore = useAuthStore()
       authStore.recordConfigActivity()
 
-      return true
+      return response
     } catch (err: any) {
       const message = err?.body?.message || err?.message || '保存配置失败'
       error.value = `配置保存失败: ${message}`

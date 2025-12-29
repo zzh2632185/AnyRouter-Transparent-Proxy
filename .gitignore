@@ -203,3 +203,4 @@ static/
 logs/
 data/
 backups/
+.ace-tool/

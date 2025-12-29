@@ -125,6 +125,15 @@ export interface ConfigUpdateRequest {
   custom_headers?: Record<string, string>
 }
 
+export interface ConfigUpdateResponse {
+  success: boolean
+  updated_fields: string[]
+  message: string
+  restart_scheduled: boolean
+  restart_after_ms?: number
+  entries: ConfigEntry[]
+}
+
 // 日志流类型
 export interface LogEntry {
   timestamp: number

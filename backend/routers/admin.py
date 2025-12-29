@@ -33,6 +33,7 @@ from ..services.stats import (
     get_time_filtered_data
 )
 from ..services.auth_service import verify_dashboard_api_key
+from ..services.restart_service import schedule_restart
 
 def _normalize_status_code(entry: dict) -> dict:
     """确保 status_code 为数字，避免前端出现 "--" 与错误颜色不一致"""
@@ -75,9 +76,16 @@ def _collect_runtime_config() -> Dict[str, Any]:
     }
 
 
-def _build_config_response() -> ConfigResponse:
+def _build_config_response(redact_sensitive: bool = False) -> ConfigResponse:
     """构建兼容旧版扁平字段与新版 entries 的响应"""
     runtime_config = _collect_runtime_config()
+    api_key_configured = bool(runtime_config.get("dashboard_api_key"))
+
+    if redact_sensitive:
+        runtime_config = dict(runtime_config)
+        runtime_config["dashboard_api_key"] = ""
+        runtime_config["custom_headers"] = {}
+
     entries: List[ConfigEntry] = []
 
     for meta in CONFIG_METADATA:
@@ -91,7 +99,7 @@ def _build_config_response() -> ConfigResponse:
 
     return ConfigResponse(
         entries=entries,
-        api_key_configured=bool(runtime_config.get("dashboard_api_key")),
+        api_key_configured=api_key_configured,
         read_only=False,
         needs_restart=False,
         target_base_url=runtime_config.get("target_base_url"),
@@ -163,7 +171,13 @@ async def admin_health(authenticated: bool = Depends(verify_dashboard_api_key)):
 
 @router.get("/api/admin/config")
 async def get_config():
-    """获取当前配置信息（允许匿名查看）"""
+    """获取当前配置信息（允许匿名查看，隐藏敏感信息）"""
+    return _build_config_response(redact_sensitive=True)
+
+
+@router.get("/api/admin/config/private")
+async def get_config_private(authenticated: bool = Depends(verify_dashboard_api_key)):
+    """获取完整配置信息（需要认证）"""
     return _build_config_response()
 
 
@@ -243,7 +257,8 @@ async def update_config(config_data: ConfigUpdateRequest, authenticated: bool = 
             if not isinstance(config_data.custom_headers, dict):
                 raise HTTPException(status_code=400, detail="custom_headers 必须是字典类型")
 
-            config_module.CUSTOM_HEADERS = config_data.custom_headers
+            config_module.CUSTOM_HEADERS.clear()
+            config_module.CUSTOM_HEADERS.update(config_data.custom_headers)
             updated_fields.append("custom_headers")
 
             headers_file = "env/.env.headers.json"
@@ -263,11 +278,27 @@ async def update_config(config_data: ConfigUpdateRequest, authenticated: bool = 
             except ConfigServiceError as e:
                 raise HTTPException(status_code=500, detail=f"保存 .env 失败: {str(e)}")
 
+        # 判断是否需要重启（env 配置变更需要重启生效）
+        needs_restart = bool(env_updates)
+        response = _build_config_response()
+
+        if needs_restart:
+            schedule_restart(delay=1.0)
+            return {
+                "success": True,
+                "updated_fields": updated_fields,
+                "message": "配置更新成功，服务将在 1 秒后自动重启。",
+                "restart_scheduled": True,
+                "restart_after_ms": 1000,
+                "entries": response.entries
+            }
+
         return {
             "success": True,
             "updated_fields": updated_fields,
-            "message": "配置更新成功。注意：部分配置需要重启服务后生效。",
-            "current_config": _build_config_response()
+            "message": "配置更新成功。",
+            "restart_scheduled": False,
+            "entries": response.entries
         }
 
     except HTTPException:

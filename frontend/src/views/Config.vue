@@ -395,6 +395,27 @@
       @close="configStore.closeRestartConfirm()"
     />
 
+    <!-- 重启遮罩层 -->
+    <div v-if="isRestarting" class="fixed inset-0 bg-gray-900 bg-opacity-75 flex items-center justify-center z-50">
+      <div class="bg-white dark:bg-gray-800 p-8 rounded-lg shadow-xl text-center max-w-md">
+        <div class="flex justify-center items-center mb-4">
+          <svg class="animate-spin h-12 w-12 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+        </div>
+        <h2 class="text-xl font-bold text-gray-900 dark:text-white mb-2">
+          服务重启中
+        </h2>
+        <p class="text-gray-600 dark:text-gray-400 mb-4">
+          {{ restartStatus }}
+        </p>
+        <p class="text-sm text-gray-500 dark:text-gray-500">
+          请不要关闭或刷新此页面
+        </p>
+      </div>
+    </div>
+
   </div>
 </template>
 
@@ -405,10 +426,15 @@ import type { SystemConfig, ConfigEntry } from '@/types'
 import ConfigEditor from '@/components/ConfigEditor.vue'
 import ConfigAuthModal from '@/components/ConfigAuthModal.vue'
 import RestartConfirmDialog from '@/components/RestartConfirmDialog.vue'
+import { useServiceRestart } from '@/composables/useServiceRestart'
+import { healthApi } from '@/services/api'
 
 // Stores
 const configStore = useConfigStore()
 const authStore = useAuthStore()
+
+// Composables
+const { isRestarting, restartStatus, startRestartWatcher } = useServiceRestart()
 
 // 响应式状态
 const loading = ref(false)
@@ -611,6 +637,11 @@ const handleAuthenticate = async (apiKey: string) => {
     await authStore.unlockConfigEditing(apiKey)
     showAuthModal.value = false
     authError.value = null
+    try {
+      await configStore.loadConfig()
+    } catch (err) {
+      console.warn('Failed to reload config after auth:', err)
+    }
     configStore.enterEditMode()
     syncEditorEntries()
   } catch (err: any) {
@@ -630,10 +661,45 @@ const handleSave = async () => {
     return
   }
 
+  // 清除之前的消息
+  error.value = null
+  success.value = null
+
   try {
+    // 保存前获取当前 boot_id（作为前置条件）
+    let oldBootId: string | null = null
+    try {
+      const health = await healthApi.checkHealth()
+      oldBootId = health.boot_id
+    } catch (err) {
+      error.value = '无法连接到服务，请检查服务状态后重试。'
+      return
+    }
+
+    // 保存配置
     configStore.updateEntries(editorEntries.value)
-    await configStore.saveConfig()
-    success.value = '配置保存成功'
+    const response = await configStore.saveConfig()
+
+    if (!response) {
+      error.value = configStore.error || '保存配置失败'
+      return
+    }
+
+    // 检查是否需要重启
+    if (response.restart_scheduled) {
+      startRestartWatcher(
+        oldBootId,
+        () => {
+          success.value = '服务重启成功！页面将在 2 秒后刷新。'
+          setTimeout(() => window.location.reload(), 2000)
+        },
+        (errorMessage) => {
+          error.value = errorMessage
+        }
+      )
+    } else {
+      success.value = '配置保存成功'
+    }
   } catch (err: any) {
     error.value = err?.message || '保存配置失败'
   }

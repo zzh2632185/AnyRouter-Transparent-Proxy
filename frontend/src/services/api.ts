@@ -4,6 +4,7 @@ import type {
   ErrorLogsResponse,
   SystemConfig,
   ConfigUpdateRequest,
+  ConfigUpdateResponse,
   ConfigResponse,
   ConfigEntry
 } from '@/types'
@@ -97,13 +98,15 @@ export class ApiError extends Error {
 export const configApi = {
   // 获取系统配置（旧接口,返回扁平结构）
   async getConfig(): Promise<SystemConfig> {
-    const response = await api.get('admin/config').json<SystemConfig>()
+    const endpoint = getAuthToken() ? 'admin/config/private' : 'admin/config'
+    const response = await api.get(endpoint).json<SystemConfig>()
     return response
   },
 
   // 获取完整配置响应（新接口,包含 entries 和元数据）
   async getConfigFull(): Promise<ConfigResponse> {
-    const response = await api.get('admin/config').json<ConfigResponse>()
+    const endpoint = getAuthToken() ? 'admin/config/private' : 'admin/config'
+    const response = await api.get(endpoint).json<ConfigResponse>()
     return response
   },
 
@@ -114,10 +117,10 @@ export const configApi = {
   },
 
   // 更新系统配置
-  async updateConfig(config: ConfigUpdateRequest): Promise<ConfigResponse> {
+  async updateConfig(config: ConfigUpdateRequest): Promise<ConfigUpdateResponse> {
     const response = await api.put('admin/config', {
       json: config
-    }).json<ConfigResponse>()
+    }).json<ConfigUpdateResponse>()
     return response
   },
 
@@ -235,9 +238,13 @@ export const statsApi = {
 
 // 健康检查 API
 export const healthApi = {
-  // 检查后端健康状态
-  async checkHealth(): Promise<{ status: string; timestamp: number }> {
-    return api.get('health').json()
+  // 检查后端健康状态（不带认证，直接访问 /health）
+  async checkHealth(): Promise<{ status: string; service: string; boot_id: string; started_at: number }> {
+    const response = await fetch('/health', { cache: 'no-store' })
+    if (!response.ok) {
+      throw new Error('Health check failed')
+    }
+    return response.json()
   }
 }
 

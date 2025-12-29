@@ -200,6 +200,8 @@ const validateEntry = (entry: ConfigEntry): boolean => {
 const handleInputChange = (index: number) => {
   const entry = localConfig.value[index]
   validateEntry(entry)
+  emit('update:modelValue', cloneEntries(localConfig.value))
+  emit('validate', { isValid: isFormValid.value })
 }
 
 const handleJsonInput = (key: string, textValue: string) => {

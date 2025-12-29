@@ -14,6 +14,7 @@ import os
 import socket
 import time
 import asyncio
+import uuid
 
 # 导入配置
 from .config import (
@@ -52,9 +53,13 @@ http_client: httpx.AsyncClient = None  # type: ignore
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
     """Manage application lifespan events"""
     global http_client
+
+    # 生成启动标识
+    app.state.boot_id = str(uuid.uuid4())
+    app.state.started_at = int(time.time())
 
     # 启动定时统计更新任务
     stats_task = asyncio.create_task(periodic_stats_update())
@@ -178,15 +183,21 @@ app.include_router(admin_router)
 # ===== 健康检查端点 =====
 
 @app.get("/health")
-async def health_check():
+async def health_check(request: Request):
     """
     健康检查端点，用于容器健康检查和服务状态监控
     不依赖上游服务，仅检查代理服务本身是否正常运行
     """
-    return {
-        "status": "healthy",
-        "service": "anthropic-transparent-proxy"
-    }
+    return Response(
+        content=json.dumps({
+            "status": "healthy",
+            "service": "anthropic-transparent-proxy",
+            "boot_id": request.app.state.boot_id,
+            "started_at": request.app.state.started_at
+        }),
+        media_type="application/json",
+        headers={"Cache-Control": "no-store"}
+    )
 
 
 @app.api_route("/", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
