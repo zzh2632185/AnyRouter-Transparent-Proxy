@@ -11,6 +11,7 @@ from starlette.background import BackgroundTask
 import httpx
 import json
 import os
+import socket
 import time
 import asyncio
 
@@ -137,6 +138,31 @@ async def lifespan(_: FastAPI):
         pass
 
     await http_client.aclose()
+
+
+def _choose_available_port(preferred_port: int) -> int:
+    """Select an available port, falling back to configured alternatives."""
+    candidates = [preferred_port]
+    fallback_port = int(os.getenv("FALLBACK_PORT", "8088"))
+    if fallback_port not in candidates:
+        candidates.append(fallback_port)
+    # Use 0 as last resort to let OS assign a free port
+    candidates.append(0)
+
+    for port in candidates:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(("0.0.0.0", port))
+                selected_port = sock.getsockname()[1]
+                if selected_port != preferred_port:
+                    print(f"[Port] {preferred_port} unavailable, switching to {selected_port}")
+                return selected_port
+            except OSError as exc:
+                # 无权限或端口占用都视为不可用，尝试下一候选
+                print(f"[Port] Unable to bind {port}: {exc}")
+                continue
+    return preferred_port
 
 
 app = FastAPI(
@@ -321,4 +347,17 @@ if __name__ == "__main__":
     import uvicorn
     # 开发模式启用热重载，生产模式禁用（通过 DEBUG_MODE 环境变量控制）
     # 注意：使用模块路径而非文件路径，以支持相对导入
-    uvicorn.run("backend.app:app", host="0.0.0.0", port=PORT, reload=DEBUG_MODE)
+    reload_enabled = DEBUG_MODE and os.getenv("ENABLE_RELOAD", "false").lower() in ("true", "1", "yes")
+    if reload_enabled:
+        print("[Uvicorn] Reload enabled via ENABLE_RELOAD")
+    else:
+        print("[Uvicorn] Reload disabled (set ENABLE_RELOAD=true to enable)")
+    try:
+        selected_port = _choose_available_port(PORT)
+        uvicorn.run("backend.app:app", host="0.0.0.0", port=selected_port, reload=reload_enabled)
+    except (PermissionError, OSError) as exc:
+        if reload_enabled:
+            print(f"[Uvicorn] Reload mode failed ({exc}); fallback to non-reload")
+            uvicorn.run("backend.app:app", host="0.0.0.0", port=PORT, reload=False)
+        else:
+            raise

@@ -10,24 +10,20 @@ import os
 import time
 import mimetypes
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, HTTPException, Depends, Response, Request, Query
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from ..config import (
-    ENABLE_DASHBOARD,
-    DASHBOARD_API_KEY,
-    TARGET_BASE_URL,
-    PRESERVE_HOST,
-    SYSTEM_PROMPT_REPLACEMENT,
-    SYSTEM_PROMPT_BLOCK_INSERT_IF_NOT_EXIST,
-    DEBUG_MODE,
-    PORT,
-    CUSTOM_HEADERS
+from .. import config as config_module
+from ..schemas.config import (
+    ConfigUpdateRequest,
+    ConfigResponse,
+    ConfigEntry,
+    CONFIG_METADATA
 )
+from ..services.config_service import config_service, ConfigServiceError
 from ..services.stats import (
     request_stats,
     path_stats,
@@ -36,6 +32,7 @@ from ..services.stats import (
     calculate_percentiles,
     get_time_filtered_data
 )
+from ..services.auth_service import verify_dashboard_api_key
 
 def _normalize_status_code(entry: dict) -> dict:
     """确保 status_code 为数字，避免前端出现 "--" 与错误颜色不一致"""
@@ -54,32 +51,59 @@ def _normalize_status_code(entry: dict) -> dict:
 # 创建路由器
 router = APIRouter()
 
-# Dashboard 认证方案
-security = HTTPBearer(auto_error=False)
+
+# ===== 辅助函数 =====
+
+def _bool_to_env(value: bool) -> str:
+    """将布尔值转换为 .env 友好的字符串"""
+    return "true" if value else "false"
 
 
-# 配置更新请求模型
-class ConfigUpdateRequest(BaseModel):
-    custom_headers: Optional[dict] = None
+def _collect_runtime_config() -> Dict[str, Any]:
+    """收集最新的运行时配置值"""
+    return {
+        "target_base_url": config_module.TARGET_BASE_URL,
+        "preserve_host": config_module.PRESERVE_HOST,
+        "system_prompt_replacement": config_module.SYSTEM_PROMPT_REPLACEMENT,
+        "system_prompt_block_insert_if_not_exist": config_module.SYSTEM_PROMPT_BLOCK_INSERT_IF_NOT_EXIST,
+        "debug_mode": config_module.DEBUG_MODE,
+        "port": config_module.PORT,
+        "enable_dashboard": config_module.ENABLE_DASHBOARD,
+        "dashboard_api_key": config_module.DASHBOARD_API_KEY,
+        "custom_headers": config_module.CUSTOM_HEADERS,
+        "dashboard_enabled": config_module.ENABLE_DASHBOARD
+    }
 
 
-async def verify_dashboard_api_key(credentials: Optional[HTTPAuthorizationCredentials] = Depends(security)) -> bool:
-    """
-    验证 Dashboard API Key
-    已移除认证检查，允许直接访问
+def _build_config_response() -> ConfigResponse:
+    """构建兼容旧版扁平字段与新版 entries 的响应"""
+    runtime_config = _collect_runtime_config()
+    entries: List[ConfigEntry] = []
 
-    Args:
-        credentials: HTTP Bearer Token 凭据（忽略）
+    for meta in CONFIG_METADATA:
+        entries.append(
+            ConfigEntry(
+                key=meta.key,
+                value=runtime_config.get(meta.key, meta.value),
+                metadata=meta.metadata
+            )
+        )
 
-    Returns:
-        bool: 总是返回 True
-    """
-    # 如果未启用 Dashboard，直接拒绝访问
-    if not ENABLE_DASHBOARD:
-        raise HTTPException(status_code=403, detail="Dashboard is disabled")
-
-    # 直接返回 True，不再检查 API Key
-    return True
+    return ConfigResponse(
+        entries=entries,
+        api_key_configured=bool(runtime_config.get("dashboard_api_key")),
+        read_only=False,
+        needs_restart=False,
+        target_base_url=runtime_config.get("target_base_url"),
+        preserve_host=runtime_config.get("preserve_host"),
+        system_prompt_replacement=runtime_config.get("system_prompt_replacement"),
+        system_prompt_block_insert_if_not_exist=runtime_config.get("system_prompt_block_insert_if_not_exist"),
+        debug_mode=runtime_config.get("debug_mode"),
+        port=runtime_config.get("port"),
+        enable_dashboard=runtime_config.get("enable_dashboard"),
+        dashboard_api_key=runtime_config.get("dashboard_api_key"),
+        custom_headers=runtime_config.get("custom_headers")
+    )
 
 
 # ===== 静态文件路由 =====
@@ -88,7 +112,7 @@ async def verify_dashboard_api_key(credentials: Optional[HTTPAuthorizationCreden
 @router.get("/admin/{path:path}")
 async def admin_static(path: str = ""):
     """处理静态文件请求"""
-    if not ENABLE_DASHBOARD:
+    if not config_module.ENABLE_DASHBOARD:
         raise HTTPException(status_code=403, detail="Dashboard is disabled")
 
     # 构建静态文件路径
@@ -132,59 +156,118 @@ async def admin_health(authenticated: bool = Depends(verify_dashboard_api_key)):
     """Dashboard 健康检查端点"""
     return {
         "status": "ok",
-        "dashboard_enabled": ENABLE_DASHBOARD,
+        "dashboard_enabled": config_module.ENABLE_DASHBOARD,
         "timestamp": time.time()
     }
 
 
 @router.get("/api/admin/config")
-async def get_config(authenticated: bool = Depends(verify_dashboard_api_key)):
-    """获取当前配置信息"""
+async def get_config():
+    """获取当前配置信息（允许匿名查看）"""
+    return _build_config_response()
+
+
+@router.head("/api/admin/config")
+async def head_config(authenticated: bool = Depends(verify_dashboard_api_key)):
+    """HEAD 探测，用于前端快速验证会话可用性"""
+    return Response(status_code=204)
+
+
+@router.get("/api/admin/config/metadata")
+async def get_config_metadata():
+    """获取配置元数据（前端可用以渲染表单，允许匿名查看）"""
     return {
-        "target_base_url": TARGET_BASE_URL,
-        "preserve_host": PRESERVE_HOST,
-        "system_prompt_replacement": SYSTEM_PROMPT_REPLACEMENT,
-        "system_prompt_block_insert_if_not_exist": SYSTEM_PROMPT_BLOCK_INSERT_IF_NOT_EXIST,
-        "debug_mode": DEBUG_MODE,
-        "port": PORT,
-        "custom_headers": CUSTOM_HEADERS,
-        "dashboard_enabled": ENABLE_DASHBOARD
+        "metadata": [entry.dict() for entry in CONFIG_METADATA]
     }
 
 
 @router.put("/api/admin/config")
 async def update_config(config_data: ConfigUpdateRequest, authenticated: bool = Depends(verify_dashboard_api_key)):
-    """更新配置信息（仅支持运行时动态配置）"""
+    """更新配置信息（支持所有配置字段）"""
     try:
-        updated_fields = []
+        updated_fields: List[str] = []
+        env_updates: Dict[str, str] = {}
 
-        # 更新自定义请求头
+        # target_base_url
+        if config_data.target_base_url is not None:
+            config_module.TARGET_BASE_URL = str(config_data.target_base_url)
+            env_updates["API_BASE_URL"] = str(config_data.target_base_url)
+            updated_fields.append("target_base_url")
+
+        # preserve_host
+        if config_data.preserve_host is not None:
+            config_module.PRESERVE_HOST = config_data.preserve_host
+            env_updates["PRESERVE_HOST"] = _bool_to_env(config_data.preserve_host)
+            updated_fields.append("preserve_host")
+
+        # system_prompt_replacement
+        if config_data.system_prompt_replacement is not None:
+            config_module.SYSTEM_PROMPT_REPLACEMENT = config_data.system_prompt_replacement
+            env_updates["SYSTEM_PROMPT_REPLACEMENT"] = config_data.system_prompt_replacement
+            updated_fields.append("system_prompt_replacement")
+
+        # system_prompt_block_insert_if_not_exist
+        if config_data.system_prompt_block_insert_if_not_exist is not None:
+            config_module.SYSTEM_PROMPT_BLOCK_INSERT_IF_NOT_EXIST = config_data.system_prompt_block_insert_if_not_exist
+            env_updates["SYSTEM_PROMPT_BLOCK_INSERT_IF_NOT_EXIST"] = _bool_to_env(
+                config_data.system_prompt_block_insert_if_not_exist
+            )
+            updated_fields.append("system_prompt_block_insert_if_not_exist")
+
+        # debug_mode
+        if config_data.debug_mode is not None:
+            config_module.DEBUG_MODE = config_data.debug_mode
+            env_updates["DEBUG_MODE"] = _bool_to_env(config_data.debug_mode)
+            updated_fields.append("debug_mode")
+
+        # port
+        if config_data.port is not None:
+            config_module.PORT = config_data.port
+            env_updates["PORT"] = str(config_data.port)
+            updated_fields.append("port")
+
+        # enable_dashboard / dashboard_enabled
+        if config_data.enable_dashboard is not None:
+            config_module.ENABLE_DASHBOARD = config_data.enable_dashboard
+            env_updates["ENABLE_DASHBOARD"] = _bool_to_env(config_data.enable_dashboard)
+            updated_fields.append("dashboard_enabled")
+
+        # dashboard_api_key
+        if config_data.dashboard_api_key is not None:
+            config_module.DASHBOARD_API_KEY = config_data.dashboard_api_key
+            env_updates["DASHBOARD_API_KEY"] = config_data.dashboard_api_key
+            updated_fields.append("dashboard_api_key")
+
+        # custom_headers
         if config_data.custom_headers is not None:
-            if isinstance(config_data.custom_headers, dict):
-                # 导入全局配置
-                from .. import config as config_module
-                config_module.CUSTOM_HEADERS = config_data.custom_headers
-                updated_fields.append("custom_headers")
-
-                # 保存到文件
-                headers_file = "env/.env.headers.json"
-                try:
-                    os.makedirs("env", exist_ok=True)
-                    with open(headers_file, 'w', encoding='utf-8') as f:
-                        json.dump(config_data.custom_headers, f, ensure_ascii=False, indent=2)
-                    print(f"[Config] Saved custom headers to {headers_file}")
-                except Exception as e:
-                    print(f"[Config] Failed to save custom headers: {e}")
-                    raise HTTPException(status_code=500, detail=f"保存配置失败: {e}")
-            else:
+            if not isinstance(config_data.custom_headers, dict):
                 raise HTTPException(status_code=400, detail="custom_headers 必须是字典类型")
 
-        # 注意：System Prompt 等核心配置需要环境变量修改，这里仅返回说明
+            config_module.CUSTOM_HEADERS = config_data.custom_headers
+            updated_fields.append("custom_headers")
+
+            headers_file = "env/.env.headers.json"
+            try:
+                os.makedirs("env", exist_ok=True)
+                with open(headers_file, 'w', encoding='utf-8') as f:
+                    json.dump(config_data.custom_headers, f, ensure_ascii=False, indent=2)
+                print(f"[Config] Saved custom headers to {headers_file}")
+            except Exception as e:
+                print(f"[Config] Failed to save custom headers: {e}")
+                raise HTTPException(status_code=500, detail=f"保存配置失败: {e}")
+
+        # 持久化 .env
+        if env_updates:
+            try:
+                await config_service.update_env(env_updates)
+            except ConfigServiceError as e:
+                raise HTTPException(status_code=500, detail=f"保存 .env 失败: {str(e)}")
+
         return {
             "success": True,
             "updated_fields": updated_fields,
-            "message": "配置更新成功。注意：某些核心配置需要重启服务后生效。",
-            "current_config": await get_config(authenticated)
+            "message": "配置更新成功。注意：部分配置需要重启服务后生效。",
+            "current_config": _build_config_response()
         }
 
     except HTTPException:
@@ -195,7 +278,6 @@ async def update_config(config_data: ConfigUpdateRequest, authenticated: bool = 
 
 @router.get("/api/admin/stats")
 async def get_stats(
-    authenticated: bool = Depends(verify_dashboard_api_key),
     start_time: Optional[float] = None,
     end_time: Optional[float] = None,
     limit: Optional[int] = 100
@@ -279,7 +361,6 @@ async def get_stats(
 
 @router.get("/api/admin/errors")
 async def get_errors(
-    authenticated: bool = Depends(verify_dashboard_api_key),
     start_time: Optional[float] = None,
     end_time: Optional[float] = None,
     limit: Optional[int] = 50,

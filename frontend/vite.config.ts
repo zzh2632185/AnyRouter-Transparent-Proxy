@@ -10,8 +10,7 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       // workaround: workbox terser bundling hangs in production mode on current toolchain
-      // development
-      mode: 'production',
+      mode: 'development',
       base: '/admin/',
       registerType: 'autoUpdate',
       includeAssets: ['icons/pwa.svg'],

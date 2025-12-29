@@ -90,7 +90,38 @@ export interface SystemConfig {
   dashboard_enabled: boolean
 }
 
+export type ConfigValue = string | number | boolean | Record<string, any> | Array<any> | null
+
+export interface ConfigMetadata {
+  value_type: 'string' | 'number' | 'boolean' | 'json'
+  editable: boolean
+  requires_restart: boolean
+  description: string
+  category: string
+  example?: ConfigValue
+}
+
+export interface ConfigEntry {
+  key: string
+  value: ConfigValue
+  metadata: ConfigMetadata
+}
+
+export interface ConfigResponse {
+  entries: ConfigEntry[]
+  api_key_configured: boolean
+  read_only: boolean
+  needs_restart: boolean
+}
+
 export interface ConfigUpdateRequest {
+  target_base_url?: string
+  preserve_host?: boolean
+  system_prompt_replacement?: string | null
+  system_prompt_block_insert_if_not_exist?: boolean
+  debug_mode?: boolean
+  port?: number
+  dashboard_api_key?: string
   custom_headers?: Record<string, string>
 }
 
