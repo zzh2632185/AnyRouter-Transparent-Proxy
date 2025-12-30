@@ -9,8 +9,10 @@ export default defineConfig({
     vue(),
     tailwindcss(),
     VitePWA({
+      // NOTE: keep PWA assets generated during `vite build`; investigate any Workbox/Terser bundling issues separately.
       // workaround: workbox terser bundling hangs in production mode on current toolchain
-      mode: 'development',
+      // mode: 'development',
+      mode: 'production',
       base: '/admin/',
       registerType: 'autoUpdate',
       includeAssets: ['icons/pwa.svg'],

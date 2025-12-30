@@ -81,3 +81,7 @@
 ```shell
 /review 请帮我 review 一下 git 4c9b8531c193aac1781ddab67df73de4ea074621 的代码
 ```
+
+```shell
+Please review changes on feat/config-editor against main, response in Chinese-simplified.
+```

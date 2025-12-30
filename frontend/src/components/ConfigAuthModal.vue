@@ -243,7 +243,8 @@ watch(
   () => props.error,
   (newError) => {
     errorMessage.value = newError
-  }
+  },
+  { immediate: true }
 )
 
 const handleKeydown = (e: KeyboardEvent) => {
