@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed, nextTick } from 'vue'
 import { configApi } from '@/services/api'
-import type { SystemConfig } from '@/types'
+import type { SystemConfig, ConfigEntry, ConfigMetadata, ConfigUpdateRequest, ConfigUpdateResponse } from '@/types'
 
 // 主题存储
 export const useThemeStore = defineStore('theme', () => {
@@ -107,23 +107,108 @@ export const useThemeStore = defineStore('theme', () => {
   }
 })
 
+// 工具函数：深拷贝对象
+function deepClone<T>(obj: T): T {
+  return JSON.parse(JSON.stringify(obj))
+}
+
+// 工具函数：稳定序列化（用于比较）
+function stableStringify(obj: any): string {
+  if (obj === null || obj === undefined) return 'null'
+  if (typeof obj !== 'object') return JSON.stringify(obj)
+  if (Array.isArray(obj)) return JSON.stringify(obj.map(stableStringify))
+
+  const keys = Object.keys(obj).sort()
+  const sorted: Record<string, any> = {}
+  for (const key of keys) {
+    sorted[key] = obj[key]
+  }
+  return JSON.stringify(sorted)
+}
+
 // 配置管理存储
 export const useConfigStore = defineStore('config', () => {
-  // 状态
-  const config = ref<SystemConfig | null>(null)
+  // 核心配置数据
+  const configEntries = ref<ConfigEntry[]>([])
+  const originalEntries = ref<ConfigEntry[]>([])
+  const metadataMap = ref<Record<string, ConfigMetadata>>({})
+
+  // 加载状态
   const loading = ref(false)
+  const loadingMetadata = ref(false)
   const error = ref<string | null>(null)
   const lastUpdated = ref<number>(0)
 
+  // 编辑工作流状态
+  const isEditing = ref(false)
+  const isSaving = ref(false)
+  const validationErrors = ref<Record<string, string | null>>({})
+
+  // 重启提示状态
+  const showRestartConfirm = ref(false)
+  const requiresRestart = ref(false)
+
+  // 兼容旧接口
+  const config = ref<SystemConfig | null>(null)
+
   // 计算属性
-  const isLoaded = computed(() => config.value !== null)
+  const isLoaded = computed(() => configEntries.value.length > 0)
+
   const hasChanges = computed(() => {
-    if (!config.value) return false
-    // TODO: 实现变更检测逻辑
-    return false
+    if (!isEditing.value) return false
+    if (configEntries.value.length !== originalEntries.value.length) return true
+    return stableStringify(configEntries.value) !== stableStringify(originalEntries.value)
   })
 
-  // 方法
+  const changedEntries = computed(() => {
+    if (!hasChanges.value) return []
+    return configEntries.value.filter(entry => {
+      const original = originalEntries.value.find(o => o.key === entry.key)
+      if (!original) return true
+      return stableStringify(original.value) !== stableStringify(entry.value)
+    })
+  })
+
+  const hasValidationErrors = computed(() =>
+    Object.values(validationErrors.value).some(err => err !== null && err !== undefined)
+  )
+
+  const canSave = computed(() => {
+    const authStore = useAuthStore()
+    return (
+      hasChanges.value &&
+      !hasValidationErrors.value &&
+      !isSaving.value &&
+      authStore.isConfigEditingAuthenticated
+    )
+  })
+
+  // 将 ConfigEntry[] 转换为 SystemConfig
+  const entriesToConfig = (entries: ConfigEntry[]): SystemConfig => {
+    const result: Partial<SystemConfig> = {
+      target_base_url: '',
+      preserve_host: false,
+      system_prompt_replacement: null,
+      system_prompt_block_insert_if_not_exist: false,
+      debug_mode: false,
+      port: 8088,
+      custom_headers: {},
+      dashboard_enabled: false
+    }
+    const mapped = result as Record<string, any>
+
+    for (const entry of entries) {
+      if (entry.key === 'enable_dashboard' || entry.key === 'dashboard_enabled') {
+        result.dashboard_enabled = Boolean(entry.value)
+        continue
+      }
+      mapped[entry.key] = entry.value
+    }
+
+    return result as SystemConfig
+  }
+
+  // 方法：加载配置
   const loadConfig = async () => {
     if (loading.value) return
 
@@ -131,7 +216,23 @@ export const useConfigStore = defineStore('config', () => {
     error.value = null
 
     try {
-      config.value = await configApi.getConfig()
+      const response = await configApi.getConfigFull()
+
+      // 保存原始 entries 和元数据
+      const entries = response.entries || []
+      configEntries.value = deepClone(entries)
+      originalEntries.value = deepClone(entries)
+
+      // 构建元数据映射
+      const map: Record<string, ConfigMetadata> = {}
+      for (const entry of entries) {
+        map[entry.key] = entry.metadata
+      }
+      metadataMap.value = map
+
+      // 兼容旧接口
+      config.value = entriesToConfig(entries)
+
       lastUpdated.value = Date.now()
     } catch (err) {
       error.value = err instanceof Error ? err.message : '加载配置失败'
@@ -141,7 +242,193 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
+  // 方法：加载元数据（如果需要单独加载）
+  const loadMetadata = async () => {
+    if (loadingMetadata.value) return
+
+    loadingMetadata.value = true
+
+    try {
+      const response = await configApi.getConfigMetadata()
+      const map: Record<string, ConfigMetadata> = {}
+      for (const entry of response.metadata) {
+        map[entry.key] = entry.metadata
+      }
+      metadataMap.value = map
+    } catch (err) {
+      console.error('加载元数据失败:', err)
+    } finally {
+      loadingMetadata.value = false
+    }
+  }
+
+  // 方法：进入编辑模式
+  const enterEditMode = () => {
+    const authStore = useAuthStore()
+    if (!authStore.isConfigEditingAuthenticated) {
+      console.warn('未授权，无法进入编辑模式')
+      error.value = '需要先通过 API Key 认证才能编辑配置'
+      return false
+    }
+
+    originalEntries.value = deepClone(configEntries.value)
+    isEditing.value = true
+    validationErrors.value = {}
+    return true
+  }
+
+  // 方法：更新单个配置项
+  const updateEntry = (key: string, value: any) => {
+    if (!isEditing.value) {
+      console.warn('未进入编辑模式，无法更新配置')
+      return
+    }
+
+    const index = configEntries.value.findIndex(e => e.key === key)
+    if (index === -1) {
+      console.warn(`配置项 ${key} 不存在`)
+      return
+    }
+
+    configEntries.value[index].value = value
+
+    // 更新兼容的 config 对象
+    if (config.value) {
+      config.value = { ...config.value, [key]: value }
+    }
+
+    // 记录编辑活动以延长会话
+    const authStore = useAuthStore()
+    authStore.recordConfigActivity()
+  }
+
+  // 方法：批量更新配置项
+  const updateEntries = (entries: ConfigEntry[]) => {
+    if (!isEditing.value) {
+      console.warn('未进入编辑模式，无法更新配置')
+      return
+    }
+
+    configEntries.value = deepClone(entries)
+    config.value = entriesToConfig(entries)
+
+    // 记录编辑活动
+    const authStore = useAuthStore()
+    authStore.recordConfigActivity()
+  }
+
+  // 方法：设置验证错误
+  const setValidationError = (key: string, errorMsg: string | null) => {
+    validationErrors.value[key] = errorMsg
+  }
+
+  // 方法：保存配置
+  const saveConfig = async (): Promise<ConfigUpdateResponse | false> => {
+    if (!canSave.value) {
+      if (!hasChanges.value) {
+        error.value = '没有需要保存的更改'
+      } else if (hasValidationErrors.value) {
+        error.value = '存在验证错误，请先修正'
+      } else {
+        const authStore = useAuthStore()
+        if (!authStore.isConfigEditingAuthenticated) {
+          error.value = '会话已过期，请重新认证'
+        }
+      }
+      return false
+    }
+
+    isSaving.value = true
+    error.value = null
+    requiresRestart.value = false
+    showRestartConfirm.value = false
+
+    try {
+      // 构建更新请求（仅包含可编辑且已更改的字段）
+      const updates: ConfigUpdateRequest = {}
+      const changed = changedEntries.value
+
+      for (const entry of changed) {
+        const meta = entry.metadata ?? metadataMap.value[entry.key]
+        if (meta?.editable) {
+          (updates as any)[entry.key] = entry.value
+        }
+      }
+
+      // 调用 API 保存
+      const response = await configApi.updateConfig(updates)
+
+      // 更新成功，刷新本地状态
+      const entries = response.entries || []
+      configEntries.value = deepClone(entries)
+      originalEntries.value = deepClone(entries)
+      config.value = entriesToConfig(entries)
+
+      lastUpdated.value = Date.now()
+
+      // 检查是否需要重启
+      const restartScheduled = response.restart_scheduled === true
+      const needsRestart = changed.some(e => {
+        const meta = e.metadata ?? metadataMap.value[e.key]
+        return meta?.requires_restart
+      })
+      if (needsRestart && !restartScheduled) {
+        requiresRestart.value = true
+        showRestartConfirm.value = true
+      } else {
+        requiresRestart.value = false
+        showRestartConfirm.value = false
+      }
+
+      // 退出编辑模式
+      isEditing.value = false
+      validationErrors.value = {}
+
+      // 记录活动
+      const authStore = useAuthStore()
+      authStore.recordConfigActivity()
+
+      return response
+    } catch (err: any) {
+      const message = err?.body?.message || err?.message || '保存配置失败'
+      error.value = `配置保存失败: ${message}`
+      throw err
+    } finally {
+      isSaving.value = false
+    }
+  }
+
+  // 方法：重置更改（恢复到原始状态）
+  const resetChanges = () => {
+    if (!isEditing.value) return
+
+    configEntries.value = deepClone(originalEntries.value)
+    config.value = entriesToConfig(originalEntries.value)
+    validationErrors.value = {}
+  }
+
+  // 方法：取消编辑
+  const cancelEditing = () => {
+    if (isEditing.value) {
+      resetChanges()
+      isEditing.value = false
+    }
+  }
+
+  // 方法：关闭重启确认对话框
+  const closeRestartConfirm = () => {
+    showRestartConfirm.value = false
+  }
+
+  // 方法：重置错误
+  const resetError = () => {
+    error.value = null
+  }
+
+  // 兼容旧接口：更新配置（已废弃，建议使用新接口）
   const updateConfig = async (updates: Partial<SystemConfig>) => {
+    console.warn('updateConfig 已废弃，请使用 enterEditMode + updateEntry + saveConfig')
+
     if (!config.value) {
       throw new Error('配置未加载')
     }
@@ -150,13 +437,8 @@ export const useConfigStore = defineStore('config', () => {
     error.value = null
 
     try {
-      // 合并更新
       const mergedConfig = { ...config.value, ...updates }
-
-      // 发送到后端
       await configApi.updateConfig({ custom_headers: mergedConfig.custom_headers })
-
-      // 更新本地状态
       config.value = mergedConfig
       lastUpdated.value = Date.now()
     } catch (err) {
@@ -167,23 +449,48 @@ export const useConfigStore = defineStore('config', () => {
     }
   }
 
-  const resetError = () => {
-    error.value = null
-  }
-
   return {
-    // 状态
-    config,
+    // 核心状态
+    configEntries,
+    originalEntries,
+    metadataMap,
     loading,
+    loadingMetadata,
     error,
     lastUpdated,
+
+    // 编辑工作流状态
+    isEditing,
+    isSaving,
+    validationErrors,
+    showRestartConfirm,
+    requiresRestart,
+
+    // 兼容旧接口
+    config,
+
     // 计算属性
     isLoaded,
     hasChanges,
+    changedEntries,
+    hasValidationErrors,
+    canSave,
+
     // 方法
     loadConfig,
-    updateConfig,
-    resetError
+    loadMetadata,
+    enterEditMode,
+    updateEntry,
+    updateEntries,
+    setValidationError,
+    saveConfig,
+    resetChanges,
+    cancelEditing,
+    closeRestartConfirm,
+    resetError,
+
+    // 兼容旧接口（已废弃）
+    updateConfig
   }
 })
 
@@ -426,39 +733,240 @@ export const useNotificationStore = defineStore('notification', () => {
   }
 })
 
+// 认证常量
+const DASHBOARD_TOKEN_KEY = 'dashboard_api_key'
+const CONFIG_SESSION_KEY = 'config_edit_session'
+const DEFAULT_CONFIG_SESSION_DURATION = 15 * 60 * 1000
+
+interface ConfigSession {
+  expiresAt: number
+  lastActive: number
+}
+
+// localStorage 安全操作封装
+const safeLocalStorage = {
+  getItem(key: string): string | null {
+    try {
+      if (typeof localStorage === 'undefined') return null
+      return localStorage.getItem(key)
+    } catch {
+      return null
+    }
+  },
+  setItem(key: string, value: string): boolean {
+    try {
+      if (typeof localStorage === 'undefined') return false
+      localStorage.setItem(key, value)
+      return true
+    } catch {
+      return false
+    }
+  },
+  removeItem(key: string): boolean {
+    try {
+      if (typeof localStorage === 'undefined') return false
+      localStorage.removeItem(key)
+      return true
+    } catch {
+      return false
+    }
+  }
+}
+
 // 认证状态存储
 export const useAuthStore = defineStore('auth', () => {
-  // 状态
+  // 主认证状态
   const isAuthenticated = ref(false)
   const token = ref<string | null>(null)
   const loading = ref(false)
   const error = ref<string | null>(null)
   const initializing = ref(true)
 
+  // 配置编辑会话状态
+  const configSession = ref<ConfigSession | null>(null)
+  const configSessionDuration = ref(DEFAULT_CONFIG_SESSION_DURATION)
+  const configUnlockLoading = ref(false)
+  let configAutoLockTimer: number | null = null
+
   // 计算属性
   const hasToken = computed(() => !!token.value)
 
-  // 方法
+  const isConfigEditingAuthenticated = computed(() => {
+    if (!configSession.value) return false
+    return configSession.value.expiresAt > Date.now()
+  })
+
+  const configSessionRemaining = computed(() => {
+    if (!configSession.value) return 0
+    return Math.max(configSession.value.expiresAt - Date.now(), 0)
+  })
+
+  // 配置编辑会话管理
+  const persistConfigSession = () => {
+    if (!configSession.value) {
+      safeLocalStorage.removeItem(CONFIG_SESSION_KEY)
+      return
+    }
+
+    safeLocalStorage.setItem(
+      CONFIG_SESSION_KEY,
+      JSON.stringify({
+        expiresAt: configSession.value.expiresAt,
+        lastActive: configSession.value.lastActive,
+        duration: configSessionDuration.value
+      })
+    )
+  }
+
+  const clearAutoLockTimer = () => {
+    if (configAutoLockTimer !== null) {
+      clearTimeout(configAutoLockTimer)
+      configAutoLockTimer = null
+    }
+  }
+
+  const scheduleAutoLock = () => {
+    clearAutoLockTimer()
+
+    if (!configSession.value) return
+
+    const remaining = configSession.value.expiresAt - Date.now()
+    if (remaining > 0) {
+      configAutoLockTimer = window.setTimeout(() => {
+        lockConfigEditing()
+      }, remaining)
+    } else {
+      lockConfigEditing()
+    }
+  }
+
+  const lockConfigEditing = () => {
+    clearAutoLockTimer()
+    if (activityThrottleTimer !== null) {
+      clearTimeout(activityThrottleTimer)
+      activityThrottleTimer = null
+    }
+    configSession.value = null
+    persistConfigSession()
+    // 清除本地存储的临时授权，防止未授权请求继续携带旧 key
+    configApi.clearToken()
+  }
+
+  const startConfigSession = (durationMs: number) => {
+    const now = Date.now()
+    configSessionDuration.value = durationMs
+    configSession.value = {
+      expiresAt: now + durationMs,
+      lastActive: now
+    }
+    persistConfigSession()
+    scheduleAutoLock()
+  }
+
+  const refreshConfigSession = (durationMs?: number) => {
+    if (!configSession.value) return
+
+    const now = Date.now()
+    const duration = durationMs ?? configSessionDuration.value
+    configSessionDuration.value = duration
+    configSession.value = {
+      expiresAt: now + duration,
+      lastActive: now
+    }
+    persistConfigSession()
+    scheduleAutoLock()
+  }
+
+  const loadPersistedConfigSession = () => {
+    const saved = safeLocalStorage.getItem(CONFIG_SESSION_KEY)
+    if (!saved) return
+
+    try {
+      const parsed = JSON.parse(saved) as {
+        expiresAt: number
+        lastActive: number
+        duration?: number
+      }
+
+      const now = Date.now()
+      if (parsed.expiresAt > now) {
+        configSessionDuration.value = parsed.duration ?? DEFAULT_CONFIG_SESSION_DURATION
+        configSession.value = {
+          expiresAt: parsed.expiresAt,
+          lastActive: parsed.lastActive
+        }
+        scheduleAutoLock()
+      } else {
+        safeLocalStorage.removeItem(CONFIG_SESSION_KEY)
+      }
+    } catch {
+      safeLocalStorage.removeItem(CONFIG_SESSION_KEY)
+    }
+  }
+
+  const unlockConfigEditing = async (
+    apiKey: string,
+    durationMs: number = DEFAULT_CONFIG_SESSION_DURATION
+  ) => {
+    configUnlockLoading.value = true
+    error.value = null
+
+    try {
+      const result = await configApi.verifyTokenWithKey(apiKey)
+
+      if (!result.valid) {
+        const errorMessages = {
+          unauthorized: 'API Key 无效或权限不足',
+          network: '网络连接失败，请检查网络',
+          timeout: '请求超时，请稍后重试',
+          server_error: '服务器错误，请稍后重试'
+        }
+        throw new Error(errorMessages[result.reason || 'unauthorized'])
+      }
+
+      // 校验成功后写入 Token，后续受保护接口（保存配置等）才能携带认证
+      configApi.setToken(apiKey)
+      startConfigSession(durationMs)
+    } catch (err) {
+      error.value = err instanceof Error ? err.message : '配置编辑认证失败'
+      throw err
+    } finally {
+      configUnlockLoading.value = false
+    }
+  }
+
+  let activityThrottleTimer: number | null = null
+  const ACTIVITY_THROTTLE_INTERVAL = 5000
+
+  const recordConfigActivity = () => {
+    if (!isConfigEditingAuthenticated.value) return
+
+    if (activityThrottleTimer !== null) return
+
+    activityThrottleTimer = window.setTimeout(() => {
+      activityThrottleTimer = null
+    }, ACTIVITY_THROTTLE_INTERVAL)
+
+    refreshConfigSession()
+  }
+
+  // 主认证方法
   const login = async (apiKey: string) => {
     loading.value = true
     error.value = null
 
     try {
-      // 设置 Token
       configApi.setToken(apiKey)
       token.value = apiKey
 
-      // 验证 Token
-      const isValid = await configApi.verifyToken()
-      if (isValid) {
+      const result = await configApi.verifyToken()
+      if (result.valid) {
         isAuthenticated.value = true
-        // 将 Token 保存到 localStorage
-        localStorage.setItem('dashboard_api_key', apiKey)
+        safeLocalStorage.setItem(DASHBOARD_TOKEN_KEY, apiKey)
       } else {
         throw new Error('API Key 无效')
       }
     } catch (err) {
-      // 清除无效 Token
       logout()
       error.value = err instanceof Error ? err.message : '登录失败'
       throw err
@@ -472,30 +980,47 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = null
     isAuthenticated.value = false
     error.value = null
-    localStorage.removeItem('dashboard_api_key')
+    safeLocalStorage.removeItem(DASHBOARD_TOKEN_KEY)
+    if (activityThrottleTimer !== null) {
+      clearTimeout(activityThrottleTimer)
+      activityThrottleTimer = null
+    }
+    lockConfigEditing()
   }
 
   const checkAuth = async () => {
-    const savedToken = localStorage.getItem('dashboard_api_key')
-    if (!savedToken) return false
-
     try {
-      token.value = savedToken
-      configApi.setToken(savedToken)
-      const isValid = await configApi.verifyToken()
-      isAuthenticated.value = isValid
-      return isValid
+      const savedToken = safeLocalStorage.getItem(DASHBOARD_TOKEN_KEY)
+      if (savedToken) {
+        token.value = savedToken
+        configApi.setToken(savedToken)
+      } else {
+        // 确保请求时不带过期/空 token
+        configApi.clearToken()
+      }
+
+      const result = await configApi.verifyToken()
+      // 没有 token 也允许只读访问；有 token 则必须验证通过才视为登录
+      isAuthenticated.value = result.valid || !savedToken
+      if (!result.valid && savedToken) {
+        logout()
+      }
+      return isAuthenticated.value
     } catch {
-      logout()
-      return false
+      if (safeLocalStorage.getItem(DASHBOARD_TOKEN_KEY)) {
+        logout()
+      }
+      // 兜底允许匿名只读
+      isAuthenticated.value = true
+      return true
     }
   }
 
   const initAuth = async () => {
     initializing.value = true
     try {
-      // 由于我们已经移除了认证，这里直接设置为已认证
-      isAuthenticated.value = true
+      await checkAuth()
+      loadPersistedConfigSession()
       initializing.value = false
     } catch (err) {
       error.value = err instanceof Error ? err.message : '认证初始化失败'
@@ -504,19 +1029,29 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   return {
-    // 状态
+    // 主认证状态
     isAuthenticated,
     token,
     loading,
     error,
     initializing,
+    // 配置编辑状态
+    configSession,
+    configSessionRemaining,
+    configUnlockLoading,
     // 计算属性
     hasToken,
-    // 方法
+    isConfigEditingAuthenticated,
+    // 主认证方法
     login,
     logout,
     checkAuth,
-    initAuth
+    initAuth,
+    // 配置编辑方法
+    unlockConfigEditing,
+    lockConfigEditing,
+    recordConfigActivity,
+    refreshConfigSession
   }
 })
 

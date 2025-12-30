@@ -202,3 +202,5 @@ node_modules/
 static/
 logs/
 data/
+backups/
+.ace-tool/
