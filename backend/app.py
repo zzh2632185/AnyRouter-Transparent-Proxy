@@ -49,15 +49,22 @@ from .utils.encoding import ensure_unicode
 
 def extract_api_key_from_auth_header(request: Request) -> str:
     """
-    从请求的 Authorization header 中提取 API Key
+    从请求的 Authorization header 或 x-api-key header 中提取 API Key
 
     支持格式:
-    - Bearer sk-xxx
-    - sk-xxx (直接传递)
+    - Authorization: Bearer sk-xxx
+    - Authorization: sk-xxx (直接传递)
+    - x-api-key: sk-xxx
 
     Returns:
         str: 提取的 API Key，如果未找到则返回空字符串
     """
+    # 首先尝试从 x-api-key header 获取（Anthropic API 常用格式）
+    api_key = request.headers.get("x-api-key", "")
+    if api_key:
+        return api_key.strip()
+
+    # 然后尝试从 Authorization header 获取
     auth_header = request.headers.get("authorization", "")
     if not auth_header:
         return ""
@@ -82,18 +89,22 @@ def get_target_url_for_key(api_key: str) -> str:
     from . import config as config_module
 
     if not api_key:
+        print(f"[Key Routing] No API key provided, using default: {config_module.TARGET_BASE_URL}")
         return config_module.TARGET_BASE_URL
+
+    # 调试：打印索引内容和当前 key
+    print(f"[Key Routing] Incoming API key: {api_key}")
+    print(f"[Key Routing] KEY_TO_TARGET_INDEX has {len(config_module.KEY_TO_TARGET_INDEX)} keys")
+    print(f"[Key Routing] INDEX keys: {list(config_module.KEY_TO_TARGET_INDEX.keys())}")
 
     # 首先从动态更新的索引中查找
     target_url = config_module.KEY_TO_TARGET_INDEX.get(api_key)
 
     if target_url:
-        if DEBUG_MODE:
-            print(f"[Key Routing] Found mapping for key: {api_key[:8]}... -> {target_url}")
+        print(f"[Key Routing] Found mapping for key: {api_key[:8]}... -> {target_url}")
         return target_url
 
-    if DEBUG_MODE:
-        print(f"[Key Routing] No mapping for key: {api_key[:8]}..., using default: {config_module.TARGET_BASE_URL}")
+    print(f"[Key Routing] No mapping for key: {api_key[:8]}..., using default: {config_module.TARGET_BASE_URL}")
 
     return config_module.TARGET_BASE_URL
 

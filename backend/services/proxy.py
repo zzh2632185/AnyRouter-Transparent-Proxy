@@ -201,9 +201,11 @@ def prepare_forward_headers(incoming_headers: Iterable[tuple], client_host: str 
     for k, v in CUSTOM_HEADERS.items():
         forward_headers[k.lower()] = v
 
-    # 添加 x-forwarded-for
-    if client_host:
-        existing = forward_headers.get("x-forwarded-for")
-        forward_headers["x-forwarded-for"] = f"{existing}, {client_host}" if existing else client_host
+    # 将 x-api-key 转换为 Authorization: Bearer 格式（模拟真实 Claude Code CLI）
+    if "x-api-key" in forward_headers:
+        api_key = forward_headers.pop("x-api-key")
+        forward_headers["authorization"] = f"Bearer {api_key}"
+
+    # 不添加 x-forwarded-for，保持与真实 Claude Code CLI 一致
 
     return forward_headers
