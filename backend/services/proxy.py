@@ -27,7 +27,7 @@ def filter_request_headers(headers: Iterable[tuple]) -> dict:
         headers: 原始请求头（可迭代的元组列表）
 
     Returns:
-        dict: 过滤后的请求头字典
+        dict: 过滤后的请求头字典（所有 key 小写化）
     """
     out = {}
     for k, v in headers:
@@ -40,7 +40,8 @@ def filter_request_headers(headers: Iterable[tuple]) -> dict:
         # 因为我们可能会修改请求体，导致长度改变
         if lk == "content-length":
             continue
-        out[k] = v
+        # 统一使用小写 key，避免重复
+        out[lk] = v
     return out
 
 
@@ -102,8 +103,21 @@ def process_request_body(body: bytes) -> bytes:
 
     # 检查 system 字段是否存在且为列表
     if "system" not in data:
-        print("[System Replacement] No 'system' field found, keeping original body")
-        return body
+        # 如果没有 system 字段，且配置了 SYSTEM_PROMPT_REPLACEMENT，则创建一个
+        if SYSTEM_PROMPT_REPLACEMENT:
+            data["system"] = SYSTEM_PROMPT_REPLACEMENT
+            print(f"[System Replacement] No 'system' field found, adding system prompt: {SYSTEM_PROMPT_REPLACEMENT[:100]}..." if len(SYSTEM_PROMPT_REPLACEMENT) > 100 else f"[System Replacement] No 'system' field found, adding system prompt: {SYSTEM_PROMPT_REPLACEMENT}")
+            # 转换回 JSON bytes
+            try:
+                modified_body = json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+                print(f"[System Replacement] Successfully modified body (original size: {len(body)} bytes, new size: {len(modified_body)} bytes)")
+                return modified_body
+            except Exception as e:
+                print(f"[System Replacement] Failed to serialize modified JSON: {e}, keeping original body")
+                return body
+        else:
+            print("[System Replacement] No 'system' field found and no replacement configured, keeping original body")
+            return body
 
     if not isinstance(data["system"], list):
         print(f"[System Replacement] 'system' field is not a list (type: {type(data['system'])}), keeping original body")
@@ -174,22 +188,22 @@ def prepare_forward_headers(incoming_headers: Iterable[tuple], client_host: str 
     Returns:
         dict: 准备好的转发请求头
     """
-    # 复制并过滤请求头
+    # 复制并过滤请求头（所有 key 已小写化）
     forward_headers = filter_request_headers(incoming_headers)
 
-    # 设置 Host（使用传入的 target_url 或默认的 TARGET_BASE_URL）
+    # 设置 host（使用传入的 target_url 或默认的 TARGET_BASE_URL）
     if not PRESERVE_HOST:
         actual_target = target_url or TARGET_BASE_URL
         parsed = urlparse(actual_target)
-        forward_headers["Host"] = parsed.netloc
+        forward_headers["host"] = parsed.netloc
 
-    # 注入自定义 Header
+    # 注入自定义 Header（统一小写 key）
     for k, v in CUSTOM_HEADERS.items():
-        forward_headers[k] = v
+        forward_headers[k.lower()] = v
 
-    # 添加 X-Forwarded-For
+    # 添加 x-forwarded-for
     if client_host:
-        existing = forward_headers.get("X-Forwarded-For")
-        forward_headers["X-Forwarded-For"] = f"{existing}, {client_host}" if existing else client_host
+        existing = forward_headers.get("x-forwarded-for")
+        forward_headers["x-forwarded-for"] = f"{existing}, {client_host}" if existing else client_host
 
     return forward_headers

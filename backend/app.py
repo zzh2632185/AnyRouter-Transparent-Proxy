@@ -279,7 +279,7 @@ async def proxy(path: str, request: Request):
         request_id = await record_request_start(path, request.method, len(body))
     else:
         request_id = None
-
+    
     # 构造目标 URL（根据 API Key 动态选择目标服务器）
     api_key = extract_api_key_from_auth_header(request)
     target_base = get_target_url_for_key(api_key)
@@ -292,12 +292,12 @@ async def proxy(path: str, request: Request):
     if DEBUG_MODE:
         try:
             data = json.loads(body.decode('utf-8'))
-            print(f"[Proxy] Original body ({len(body)} bytes): {json.dumps(data, indent=4)}")
+            print(f"[Proxy] Request body ({len(body)} bytes): {json.dumps(data, indent=4)}")
         except (json.JSONDecodeError, UnicodeDecodeError) as e:
             print(f"[Proxy] Failed to parse JSON: {e}")
     else:
         print(f"[Proxy] Request: {request.method} {path}")
-        print(f"[Proxy] Original body ({len(body)} bytes): {body[:200]}..." if len(body) > 200 else f"[Proxy] Original body: {body}")
+        print(f"[Proxy] Request body ({len(body)} bytes): {body[:200]}..." if len(body) > 200 else f"[Proxy] Request body: {body}")
 
     # 处理请求体（替换 system prompt）
     # 仅在路由为 /v1/messages 时执行处理
@@ -309,6 +309,11 @@ async def proxy(path: str, request: Request):
     incoming_headers = list(request.headers.items())
     client_host = request.client.host if request.client else None
     forward_headers = prepare_forward_headers(incoming_headers, client_host, target_base)
+    
+    # 打印转发的请求头（调试用）
+    if DEBUG_MODE:
+        print(f"[Proxy] Target URL: {target_url}")
+        print(f"[Proxy] Forward headers: {json.dumps(forward_headers, indent=2)}")
 
     # 发起上游请求并流式处理响应
     response_time = 0
@@ -325,6 +330,11 @@ async def proxy(path: str, request: Request):
 
         # 发送请求并开启流式模式 (不使用 async with)
         resp = await http_client.send(req, stream=True)
+        
+        # 打印上游响应信息（调试用）
+        if DEBUG_MODE:
+            print(f"[Proxy] Upstream response status: {resp.status_code}")
+            print(f"[Proxy] Upstream response headers: {dict(resp.headers)}")
 
         # 过滤响应头
         response_headers = filter_response_headers(resp.headers.items())
