@@ -6,7 +6,12 @@ import type {
   ConfigUpdateRequest,
   ConfigUpdateResponse,
   ConfigResponse,
-  ConfigEntry
+  ConfigEntry,
+  KeyMappingsResponse,
+  KeyMappingsPrivateResponse,
+  AddTargetRequest,
+  UpdateTargetRequest,
+  KeyMappingOperationResponse
 } from '@/types'
 
 // API 配置
@@ -249,6 +254,63 @@ export const healthApi = {
       throw new Error('Health check failed')
     }
     return response.json()
+  }
+}
+
+// Key-目标服务器映射 API
+export const keyMappingApi = {
+  // 获取映射列表（匿名，隐藏 key 详情）
+  async getMappings(): Promise<KeyMappingsResponse> {
+    const response = await api.get('admin/key-mappings').json<KeyMappingsResponse>()
+    return response
+  },
+
+  // 获取完整映射列表（需要认证）
+  async getMappingsPrivate(): Promise<KeyMappingsPrivateResponse> {
+    const response = await api.get('admin/key-mappings/private').json<KeyMappingsPrivateResponse>()
+    return response
+  },
+
+  // 添加目标服务器
+  async addTarget(request: AddTargetRequest): Promise<KeyMappingOperationResponse> {
+    const response = await api.post('admin/key-mappings/targets', {
+      json: request
+    }).json<KeyMappingOperationResponse>()
+    return response
+  },
+
+  // 删除目标服务器
+  async removeTarget(targetUrl: string): Promise<KeyMappingOperationResponse> {
+    const response = await api.delete('admin/key-mappings/targets', {
+      searchParams: { target_url: targetUrl }
+    }).json<KeyMappingOperationResponse>()
+    return response
+  },
+
+  // 更新目标服务器
+  async updateTarget(targetUrl: string, request: UpdateTargetRequest): Promise<KeyMappingOperationResponse> {
+    const response = await api.put('admin/key-mappings/targets', {
+      searchParams: { target_url: targetUrl },
+      json: request
+    }).json<KeyMappingOperationResponse>()
+    return response
+  },
+
+  // 向目标服务器添加 Key
+  async addKeyToTarget(targetUrl: string, key: string): Promise<KeyMappingOperationResponse> {
+    const response = await api.post('admin/key-mappings/targets/keys', {
+      searchParams: { target_url: targetUrl },
+      json: { key }
+    }).json<KeyMappingOperationResponse>()
+    return response
+  },
+
+  // 从目标服务器删除 Key
+  async removeKeyFromTarget(targetUrl: string, key: string): Promise<KeyMappingOperationResponse> {
+    const response = await api.delete('admin/key-mappings/targets/keys', {
+      searchParams: { target_url: targetUrl, key }
+    }).json<KeyMappingOperationResponse>()
+    return response
   }
 }
 

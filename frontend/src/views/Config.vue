@@ -235,6 +235,26 @@
         </div>
       </div>
 
+      <!-- Key-目标服务器映射 -->
+      <div class="bg-white dark:bg-gray-800 shadow-sm border border-gray-200 dark:border-gray-700 rounded-lg">
+        <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+          <h3 class="text-lg font-medium text-gray-900 dark:text-white">
+            动态路由配置
+          </h3>
+          <p class="mt-1 text-sm text-gray-600 dark:text-gray-400">
+            根据 API Key 将请求路由到不同的目标服务器
+          </p>
+        </div>
+        <div class="p-6">
+          <KeyMappingManager
+            ref="keyMappingManagerRef"
+            :is-authenticated="authStore.isConfigEditingAuthenticated"
+            @error="handleKeyMappingError"
+            @success="handleKeyMappingSuccess"
+          />
+        </div>
+      </div>
+
       <!-- System Prompt 配置 -->
       <div class="bg-white dark:bg-gray-800 shadow-sm border border-gray-200 dark:border-gray-700 rounded-lg">
         <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
@@ -426,6 +446,7 @@ import type { SystemConfig, ConfigEntry } from '@/types'
 import ConfigEditor from '@/components/ConfigEditor.vue'
 import ConfigAuthModal from '@/components/ConfigAuthModal.vue'
 import RestartConfirmDialog from '@/components/RestartConfirmDialog.vue'
+import KeyMappingManager from '@/components/KeyMappingManager.vue'
 import { useServiceRestart } from '@/composables/useServiceRestart'
 import { healthApi } from '@/services/api'
 
@@ -447,6 +468,9 @@ const showAuthModal = ref(false)
 const editorEntries = ref<ConfigEntry[]>([])
 const isEditorValid = ref(true)
 const authError = ref<string | null>(null)
+
+// Key 映射管理器引用
+const keyMappingManagerRef = ref<InstanceType<typeof KeyMappingManager> | null>(null)
 
 // 表单数据
 const formData = ref<SystemConfig>({
@@ -614,6 +638,15 @@ const clearError = () => {
 
 const clearSuccess = () => {
   success.value = null
+}
+
+// Key 映射管理器事件处理
+const handleKeyMappingError = (message: string) => {
+  error.value = message
+}
+
+const handleKeyMappingSuccess = (message: string) => {
+  success.value = message
 }
 
 // 同步编辑器数据

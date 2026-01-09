@@ -100,3 +100,82 @@ def load_custom_headers() -> dict:
 
 # 加载自定义请求头
 CUSTOM_HEADERS = load_custom_headers()
+
+
+def load_key_target_mappings() -> dict:
+    """
+    从 env/.env.key-mappings.json 文件加载 Key-目标服务器映射配置
+
+    数据结构示例:
+    {
+        "mappings": [
+            {
+                "target_url": "https://api.openai.com",
+                "keys": ["sk-xxx1", "sk-xxx2"]
+            }
+        ]
+    }
+
+    Returns:
+        dict: 映射配置，包含 mappings 列表
+    """
+    mappings_file = "env/.env.key-mappings.json"
+
+    if not os.path.exists(mappings_file):
+        print(f"[Key Mappings] Config file '{mappings_file}' not found, using empty mappings")
+        return {"mappings": []}
+
+    try:
+        with open(mappings_file, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        if not isinstance(data, dict) or "mappings" not in data:
+            print(f"[Key Mappings] Invalid config format, using empty mappings")
+            return {"mappings": []}
+
+        mappings = data.get("mappings", [])
+        if not isinstance(mappings, list):
+            print(f"[Key Mappings] 'mappings' is not a list, using empty mappings")
+            return {"mappings": []}
+
+        print(f"[Key Mappings] Successfully loaded {len(mappings)} target mappings")
+        for mapping in mappings:
+            target_url = mapping.get("target_url", "unknown")
+            keys_count = len(mapping.get("keys", []))
+            print(f"[Key Mappings]   - {target_url}: {keys_count} keys")
+
+        return data
+
+    except json.JSONDecodeError as e:
+        print(f"[Key Mappings] Failed to parse JSON: {e}, using empty mappings")
+        return {"mappings": []}
+    except Exception as e:
+        print(f"[Key Mappings] Failed to load: {e}, using empty mappings")
+        return {"mappings": []}
+
+
+def build_key_to_target_index(mappings_data: dict) -> dict:
+    """
+    构建 key -> target_url 的索引，用于快速查找
+
+    Args:
+        mappings_data: 原始映射数据
+
+    Returns:
+        dict: key -> target_url 的映射字典
+    """
+    index = {}
+    for mapping in mappings_data.get("mappings", []):
+        target_url = mapping.get("target_url")
+        if not target_url:
+            continue
+        for key in mapping.get("keys", []):
+            if key:
+                index[key] = target_url
+    return index
+
+
+# 加载 Key-目标服务器映射
+KEY_TARGET_MAPPINGS = load_key_target_mappings()
+# 构建快速查找索引
+KEY_TO_TARGET_INDEX = build_key_to_target_index(KEY_TARGET_MAPPINGS)

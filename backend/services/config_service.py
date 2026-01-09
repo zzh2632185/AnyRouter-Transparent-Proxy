@@ -8,12 +8,23 @@ import asyncio
 import errno
 import os
 import shutil
+import sys
 import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
 
-from fcntl import flock, LOCK_EX, LOCK_UN, LOCK_NB
+# Windows 不支持 fcntl，使用条件导入
+if sys.platform != 'win32':
+    from fcntl import flock, LOCK_EX, LOCK_UN, LOCK_NB
+else:
+    # Windows 上提供空实现
+    LOCK_EX = 0
+    LOCK_UN = 0
+    LOCK_NB = 0
+    def flock(fd, operation):
+        pass
+
 from dotenv import dotenv_values, set_key
 
 

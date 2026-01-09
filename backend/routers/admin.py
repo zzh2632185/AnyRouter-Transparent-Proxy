@@ -34,6 +34,7 @@ from ..services.stats import (
 )
 from ..services.auth_service import verify_dashboard_api_key
 from ..services.restart_service import schedule_restart
+from ..services.key_mapping_service import key_mapping_service, TargetMapping
 
 def _normalize_status_code(entry: dict) -> dict:
     """确保 status_code 为数字，避免前端出现 "--" 与错误颜色不一致"""
@@ -455,3 +456,169 @@ async def get_errors(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取错误信息失败: {str(e)}")
+
+
+# ===== Key-Target 映射管理 API =====
+
+class AddTargetRequest(BaseModel):
+    """添加目标服务器请求"""
+    target_url: str = Field(..., description="目标服务器地址")
+    keys: List[str] = Field(default=[], description="关联的 API Keys")
+
+
+class UpdateTargetRequest(BaseModel):
+    """更新目标服务器请求"""
+    new_target_url: Optional[str] = Field(None, description="新的目标服务器地址")
+    keys: Optional[List[str]] = Field(None, description="更新后的 API Keys 列表")
+
+
+class AddKeyRequest(BaseModel):
+    """添加 Key 请求"""
+    key: str = Field(..., description="API Key")
+
+
+class RemoveKeyRequest(BaseModel):
+    """删除 Key 请求"""
+    key: str = Field(..., description="API Key")
+
+
+@router.get("/api/admin/key-mappings")
+async def get_key_mappings():
+    """获取所有 Key-目标服务器映射（允许匿名查看，隐藏 key 值）"""
+    mappings = key_mapping_service.get_all_mappings()
+    
+    redacted_mappings = []
+    for mapping in mappings:
+        redacted_mappings.append({
+            "target_url": mapping.target_url,
+            "keys_count": len(mapping.keys),
+            "keys_preview": [f"{k[:8]}..." if len(k) > 8 else k for k in mapping.keys[:3]]
+        })
+    
+    return {
+        "mappings": redacted_mappings,
+        "total_targets": len(mappings),
+        "total_keys": sum(len(m.keys) for m in mappings)
+    }
+
+
+@router.get("/api/admin/key-mappings/private")
+async def get_key_mappings_private(authenticated: bool = Depends(verify_dashboard_api_key)):
+    """获取完整 Key-目标服务器映射（需要认证）"""
+    mappings = key_mapping_service.get_all_mappings()
+    
+    return {
+        "mappings": [{"target_url": m.target_url, "keys": m.keys} for m in mappings],
+        "total_targets": len(mappings),
+        "total_keys": sum(len(m.keys) for m in mappings)
+    }
+
+
+@router.post("/api/admin/key-mappings/targets")
+async def add_target(
+    request: AddTargetRequest,
+    authenticated: bool = Depends(verify_dashboard_api_key)
+):
+    """添加目标服务器"""
+    success = key_mapping_service.add_target(request.target_url, request.keys)
+    
+    if not success:
+        raise HTTPException(status_code=400, detail="目标服务器已存在或添加失败")
+    
+    key_mapping_service.reload_config_module()
+    
+    return {
+        "success": True,
+        "message": f"成功添加目标服务器: {request.target_url}",
+        "target_url": request.target_url,
+        "keys_count": len(request.keys)
+    }
+
+
+@router.delete("/api/admin/key-mappings/targets")
+async def remove_target(
+    target_url: str = Query(..., description="要删除的目标服务器地址"),
+    authenticated: bool = Depends(verify_dashboard_api_key)
+):
+    """删除目标服务器"""
+    success = key_mapping_service.remove_target(target_url)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="目标服务器不存在")
+    
+    key_mapping_service.reload_config_module()
+    
+    return {
+        "success": True,
+        "message": f"成功删除目标服务器: {target_url}"
+    }
+
+
+@router.put("/api/admin/key-mappings/targets")
+async def update_target(
+    target_url: str = Query(..., description="要更新的目标服务器地址"),
+    request: UpdateTargetRequest = None,
+    authenticated: bool = Depends(verify_dashboard_api_key)
+):
+    """更新目标服务器配置"""
+    if request is None:
+        raise HTTPException(status_code=400, detail="请求体不能为空")
+    
+    success = key_mapping_service.update_target(
+        target_url,
+        new_target_url=request.new_target_url,
+        keys=request.keys
+    )
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="目标服务器不存在")
+    
+    key_mapping_service.reload_config_module()
+    
+    return {
+        "success": True,
+        "message": f"成功更新目标服务器: {target_url}"
+    }
+
+
+@router.post("/api/admin/key-mappings/targets/keys")
+async def add_key_to_target(
+    target_url: str = Query(..., description="目标服务器地址"),
+    request: AddKeyRequest = None,
+    authenticated: bool = Depends(verify_dashboard_api_key)
+):
+    """向目标服务器添加 Key"""
+    if request is None:
+        raise HTTPException(status_code=400, detail="请求体不能为空")
+    
+    success = key_mapping_service.add_key_to_target(target_url, request.key)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="目标服务器不存在")
+    
+    key_mapping_service.reload_config_module()
+    
+    return {
+        "success": True,
+        "message": f"成功添加 Key 到 {target_url}"
+    }
+
+
+@router.delete("/api/admin/key-mappings/targets/keys")
+async def remove_key_from_target(
+    target_url: str = Query(..., description="目标服务器地址"),
+    key: str = Query(..., description="要删除的 API Key"),
+    authenticated: bool = Depends(verify_dashboard_api_key)
+):
+    """从目标服务器删除 Key"""
+    success = key_mapping_service.remove_key_from_target(target_url, key)
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="目标服务器不存在")
+    
+    key_mapping_service.reload_config_module()
+    
+    return {
+        "success": True,
+        "message": f"成功从 {target_url} 删除 Key"
+    }

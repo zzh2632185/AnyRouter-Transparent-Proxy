@@ -23,7 +23,8 @@ from .config import (
     PORT,
     ENABLE_DASHBOARD,
     DASHBOARD_API_KEY,
-    CUSTOM_HEADERS
+    CUSTOM_HEADERS,
+    KEY_TO_TARGET_INDEX
 )
 
 # 导入统计服务
@@ -44,6 +45,57 @@ from .services.proxy import (
 
 # 导入编码工具
 from .utils.encoding import ensure_unicode
+
+
+def extract_api_key_from_auth_header(request: Request) -> str:
+    """
+    从请求的 Authorization header 中提取 API Key
+
+    支持格式:
+    - Bearer sk-xxx
+    - sk-xxx (直接传递)
+
+    Returns:
+        str: 提取的 API Key，如果未找到则返回空字符串
+    """
+    auth_header = request.headers.get("authorization", "")
+    if not auth_header:
+        return ""
+
+    # 去除 Bearer 前缀（如果存在）
+    if auth_header.lower().startswith("bearer "):
+        return auth_header[7:].strip()
+
+    return auth_header.strip()
+
+
+def get_target_url_for_key(api_key: str) -> str:
+    """
+    根据 API Key 获取对应的目标服务器地址
+
+    Args:
+        api_key: API Key
+
+    Returns:
+        str: 目标服务器地址，如果未找到映射则返回默认的 TARGET_BASE_URL
+    """
+    from . import config as config_module
+
+    if not api_key:
+        return config_module.TARGET_BASE_URL
+
+    # 首先从动态更新的索引中查找
+    target_url = config_module.KEY_TO_TARGET_INDEX.get(api_key)
+
+    if target_url:
+        if DEBUG_MODE:
+            print(f"[Key Routing] Found mapping for key: {api_key[:8]}... -> {target_url}")
+        return target_url
+
+    if DEBUG_MODE:
+        print(f"[Key Routing] No mapping for key: {api_key[:8]}..., using default: {config_module.TARGET_BASE_URL}")
+
+    return config_module.TARGET_BASE_URL
 
 # 导入 Admin 路由
 from .routers.admin import router as admin_router
@@ -228,9 +280,11 @@ async def proxy(path: str, request: Request):
     else:
         request_id = None
 
-    # 构造目标 URL
+    # 构造目标 URL（根据 API Key 动态选择目标服务器）
+    api_key = extract_api_key_from_auth_header(request)
+    target_base = get_target_url_for_key(api_key)
     query = request.url.query
-    target_url = f"{TARGET_BASE_URL}/{path}"
+    target_url = f"{target_base}/{path}"
     if query:
         target_url += f"?{query}"
 
@@ -254,7 +308,7 @@ async def proxy(path: str, request: Request):
     # 准备转发的请求头
     incoming_headers = list(request.headers.items())
     client_host = request.client.host if request.client else None
-    forward_headers = prepare_forward_headers(incoming_headers, client_host)
+    forward_headers = prepare_forward_headers(incoming_headers, client_host, target_base)
 
     # 发起上游请求并流式处理响应
     response_time = 0

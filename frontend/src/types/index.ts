@@ -170,3 +170,44 @@ export interface MenuItem {
   icon: string
   badge?: string | number
 }
+
+// Key-目标服务器映射类型
+export interface TargetMapping {
+  target_url: string
+  keys: string[]
+}
+
+export interface TargetMappingPreview {
+  target_url: string
+  keys_count: number
+  keys_preview: string[]
+}
+
+export interface KeyMappingsResponse {
+  mappings: TargetMappingPreview[]
+  total_targets: number
+  total_keys: number
+}
+
+export interface KeyMappingsPrivateResponse {
+  mappings: TargetMapping[]
+  total_targets: number
+  total_keys: number
+}
+
+export interface AddTargetRequest {
+  target_url: string
+  keys?: string[]
+}
+
+export interface UpdateTargetRequest {
+  new_target_url?: string
+  keys?: string[]
+}
+
+export interface KeyMappingOperationResponse {
+  success: boolean
+  message: string
+  target_url?: string
+  keys_count?: number
+}

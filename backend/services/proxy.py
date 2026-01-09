@@ -162,13 +162,14 @@ def process_request_body(body: bytes) -> bytes:
         return body
 
 
-def prepare_forward_headers(incoming_headers: Iterable[tuple], client_host: str = None) -> dict:
+def prepare_forward_headers(incoming_headers: Iterable[tuple], client_host: str = None, target_url: str = None) -> dict:
     """
     准备转发的请求头
 
     Args:
         incoming_headers: 原始请求头
         client_host: 客户端 IP 地址
+        target_url: 目标服务器 URL（用于设置 Host 头）
 
     Returns:
         dict: 准备好的转发请求头
@@ -176,9 +177,10 @@ def prepare_forward_headers(incoming_headers: Iterable[tuple], client_host: str 
     # 复制并过滤请求头
     forward_headers = filter_request_headers(incoming_headers)
 
-    # 设置 Host
+    # 设置 Host（使用传入的 target_url 或默认的 TARGET_BASE_URL）
     if not PRESERVE_HOST:
-        parsed = urlparse(TARGET_BASE_URL)
+        actual_target = target_url or TARGET_BASE_URL
+        parsed = urlparse(actual_target)
         forward_headers["Host"] = parsed.netloc
 
     # 注入自定义 Header
