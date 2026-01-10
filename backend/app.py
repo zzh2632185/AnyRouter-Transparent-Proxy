@@ -313,8 +313,18 @@ async def proxy(path: str, request: Request):
     # 处理请求体（替换 system prompt）
     # 仅在路由为 /v1/messages 时执行处理
     print(f"[Proxy] Processing request for path: {path}")
-    if path == "v1/messages" or path == "v1/messages/":
+    # 处理 v1/messages 路径（可能带有 query 参数如 ?beta=true）
+    if path == "v1/messages" or path == "v1/messages/" or path.startswith("v1/messages?"):
         body = process_request_body(body)
+    
+    # 如果请求的是 v1/messages 且没有 beta=true 参数，自动添加
+    if (path == "v1/messages" or path == "v1/messages/") and "beta=true" not in (query or ""):
+        if query:
+            query = f"{query}&beta=true"
+        else:
+            query = "beta=true"
+        # 重新构造 target_url
+        target_url = f"{target_base}/{path}?{query}"
 
     # 准备转发的请求头
     incoming_headers = list(request.headers.items())

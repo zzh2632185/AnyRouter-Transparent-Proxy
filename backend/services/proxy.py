@@ -27,9 +27,10 @@ def filter_request_headers(headers: Iterable[tuple]) -> dict:
         headers: 原始请求头（可迭代的元组列表）
 
     Returns:
-        dict: 过滤后的请求头字典（所有 key 小写化）
+        dict: 过滤后的请求头字典（保留原始大小写）
     """
     out = {}
+    seen_keys = set()  # 用于追踪已处理的小写 key，避免重复
     for k, v in headers:
         lk = k.lower()
         if lk in HOP_BY_HOP_HEADERS:
@@ -40,8 +41,12 @@ def filter_request_headers(headers: Iterable[tuple]) -> dict:
         # 因为我们可能会修改请求体，导致长度改变
         if lk == "content-length":
             continue
-        # 统一使用小写 key，避免重复
-        out[lk] = v
+        # 避免重复 key（后面的会覆盖前面的）
+        if lk in seen_keys:
+            continue
+        seen_keys.add(lk)
+        # 保留原始大小写
+        out[k] = v
     return out
 
 
@@ -197,14 +202,24 @@ def prepare_forward_headers(incoming_headers: Iterable[tuple], client_host: str 
         parsed = urlparse(actual_target)
         forward_headers["host"] = parsed.netloc
 
-    # 注入自定义 Header（统一小写 key）
+    # 注入自定义 Header（保留原始大小写）
     for k, v in CUSTOM_HEADERS.items():
-        forward_headers[k.lower()] = v
+        # 先检查是否有相同的 key（不区分大小写），如果有则删除旧的
+        for existing_key in list(forward_headers.keys()):
+            if existing_key.lower() == k.lower():
+                del forward_headers[existing_key]
+                break
+        forward_headers[k] = v
 
     # 将 x-api-key 转换为 Authorization: Bearer 格式（模拟真实 Claude Code CLI）
-    if "x-api-key" in forward_headers:
-        api_key = forward_headers.pop("x-api-key")
-        forward_headers["authorization"] = f"Bearer {api_key}"
+    # 检查小写和原始大小写两种情况
+    api_key_value = None
+    for key in list(forward_headers.keys()):
+        if key.lower() == "x-api-key":
+            api_key_value = forward_headers.pop(key)
+            break
+    if api_key_value:
+        forward_headers["Authorization"] = f"Bearer {api_key_value}"
 
     # 不添加 x-forwarded-for，保持与真实 Claude Code CLI 一致
 
