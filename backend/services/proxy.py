@@ -76,7 +76,102 @@ def filter_response_headers(headers: Iterable[tuple]) -> dict:
     return out
 
 
-def process_request_body(body: bytes) -> bytes:
+# AnyRouter 专用提示词（当 AnyRouter key 请求 AnyRouter 目标时强制使用）
+ANYROUTER_SYSTEM_PROMPT = "You are Claude Code, Anthropic's official CLI for Claude."
+
+
+def _is_anyrouter_to_anyrouter(api_key: str, target_url: str) -> bool:
+    """
+    判断是否为 AnyRouter key 请求 AnyRouter 目标的场景
+    
+    Args:
+        api_key: API Key
+        target_url: 目标服务器 URL
+    
+    Returns:
+        bool: 如果是 AnyRouter key 请求 AnyRouter 目标则返回 True
+    """
+    if not api_key or not target_url:
+        return False
+    
+    # 检查目标是否为 AnyRouter（包含 anyrouter.top）
+    is_anyrouter_target = "anyrouter.top" in target_url.lower()
+    
+    # AnyRouter key 通常以 sk- 开头，且目标是 anyrouter.top
+    # 这里主要判断目标是否为 anyrouter，因为只有 anyrouter 的 key 才能访问 anyrouter
+    return is_anyrouter_target
+
+
+def _ensure_anyrouter_beta_header(headers: dict) -> None:
+    """
+    确保 AnyRouter 请求的 anthropic-beta 头部包含必需的 claude-code-20250219 标识
+    
+    AnyRouter 需要此标识才能正确识别和处理 Claude Code 的请求。
+    此函数仅在目标为 anyrouter.top 时被调用，不影响其他代理目标。
+    
+    Args:
+        headers: 请求头字典，将被原地修改
+    """
+    CLAUDE_CODE_BETA = "claude-code-20250219"
+    
+    # 查找现有的 anthropic-beta 头部（不区分大小写）
+    existing_key = None
+    existing_value = None
+    for key in headers:
+        if key.lower() == "anthropic-beta":
+            existing_key = key
+            existing_value = headers[key]
+            break
+    
+    if existing_key:
+        # 检查是否已包含 claude-code beta 标识
+        if CLAUDE_CODE_BETA not in existing_value:
+            # 在现有值前面添加 claude-code beta 标识
+            new_value = f"{CLAUDE_CODE_BETA},{existing_value}"
+            headers[existing_key] = new_value
+            print(f"[AnyRouter Beta Header] Added {CLAUDE_CODE_BETA} to existing anthropic-beta: {new_value}")
+        else:
+            print(f"[AnyRouter Beta Header] anthropic-beta already contains {CLAUDE_CODE_BETA}, no change needed")
+    else:
+        # 没有 anthropic-beta 头部，添加一个包含必需标识的
+        headers["anthropic-beta"] = f"{CLAUDE_CODE_BETA},interleaved-thinking-2025-05-14"
+        print(f"[AnyRouter Beta Header] Added new anthropic-beta header with {CLAUDE_CODE_BETA}")
+
+
+def _force_anyrouter_system_prompt(body: bytes) -> bytes:
+    """
+    强制将 system prompt 设置为 AnyRouter 唯一提示词
+    
+    注意：AnyRouter 要求 system 必须是列表格式，不能是字符串格式！
+    
+    Args:
+        body: 原始请求体（bytes）
+    
+    Returns:
+        处理后的请求体（bytes），如果无法处理则返回原始 body
+    """
+    try:
+        data = json.loads(body.decode('utf-8'))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        print(f"[AnyRouter System Prompt] Failed to parse JSON: {e}, keeping original body")
+        return body
+    
+    # 强制设置 system 为唯一提示词（必须使用列表格式！）
+    # AnyRouter 要求 system 是列表格式，字符串格式会导致 500 错误
+    data["system"] = [{"type": "text", "text": ANYROUTER_SYSTEM_PROMPT}]
+    print(f"[AnyRouter System Prompt] Forced system prompt to list format: {ANYROUTER_SYSTEM_PROMPT}")
+    
+    # 转换回 JSON bytes
+    try:
+        modified_body = json.dumps(data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+        print(f"[AnyRouter System Prompt] Successfully modified body (original size: {len(body)} bytes, new size: {len(modified_body)} bytes)")
+        return modified_body
+    except Exception as e:
+        print(f"[AnyRouter System Prompt] Failed to serialize modified JSON: {e}, keeping original body")
+        return body
+
+
+def process_request_body(body: bytes, api_key: str = None, target_url: str = None) -> bytes:
     """
     处理请求体,替换 system 数组中第一个元素的 text 内容
 
@@ -85,10 +180,20 @@ def process_request_body(body: bytes) -> bytes:
 
     Args:
         body: 原始请求体（bytes）
+        api_key: API Key（用于判断是否为 AnyRouter 请求）
+        target_url: 目标服务器 URL（用于判断是否请求 AnyRouter）
 
     Returns:
         处理后的请求体（bytes），如果无法处理则返回原始 body
     """
+    # 判断是否为 AnyRouter key 请求 AnyRouter 目标
+    is_anyrouter = _is_anyrouter_to_anyrouter(api_key, target_url)
+    
+    if is_anyrouter:
+        # AnyRouter -> AnyRouter：强制使用唯一提示词
+        print(f"[System Replacement] AnyRouter key to AnyRouter target detected, forcing unique system prompt")
+        return _force_anyrouter_system_prompt(body)
+    
     # 如果未配置替换文本，直接返回原始 body
     if SYSTEM_PROMPT_REPLACEMENT is None:
         print("[System Replacement] Not configured, keeping original body")
@@ -210,6 +315,11 @@ def prepare_forward_headers(incoming_headers: Iterable[tuple], client_host: str 
                 del forward_headers[existing_key]
                 break
         forward_headers[k] = v
+
+    # AnyRouter 专用处理：确保 anthropic-beta 头部包含 claude-code-20250219
+    # 这是 Claude Code CLI 的必需标识，AnyRouter 需要此标识才能正确处理请求
+    if target_url and "anyrouter.top" in target_url.lower():
+        _ensure_anyrouter_beta_header(forward_headers)
 
     # 将 x-api-key 转换为 Authorization: Bearer 格式（模拟真实 Claude Code CLI）
     # 检查小写和原始大小写两种情况
