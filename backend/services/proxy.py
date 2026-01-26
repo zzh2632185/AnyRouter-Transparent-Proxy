@@ -215,7 +215,14 @@ def process_request_body(body: bytes, api_key: str = None, target_url: str = Non
     if "system" not in data:
         # 如果没有 system 字段，且配置了 SYSTEM_PROMPT_REPLACEMENT，则创建一个
         if SYSTEM_PROMPT_REPLACEMENT:
-            data["system"] = SYSTEM_PROMPT_REPLACEMENT
+            # 必须创建符合 Anthropic API 格式的数组结构
+            data["system"] = [{
+                "type": "text",
+                "text": SYSTEM_PROMPT_REPLACEMENT,
+                "cache_control": {
+                    "type": "ephemeral"
+                }
+            }]
             print(f"[System Replacement] No 'system' field found, adding system prompt: {SYSTEM_PROMPT_REPLACEMENT[:100]}..." if len(SYSTEM_PROMPT_REPLACEMENT) > 100 else f"[System Replacement] No 'system' field found, adding system prompt: {SYSTEM_PROMPT_REPLACEMENT}")
             # 转换回 JSON bytes
             try:
@@ -330,6 +337,15 @@ def prepare_forward_headers(incoming_headers: Iterable[tuple], client_host: str 
             break
     if api_key_value:
         forward_headers["Authorization"] = f"Bearer {api_key_value}"
+
+    # 标准化 authorization 头为大写 Authorization
+    # 某些客户端（如 OpenCode）使用小写的 authorization，需要统一为大写
+    # 这是因为某些上游服务（如 AnyRouter）可能对请求头大小写敏感
+    for key in list(forward_headers.keys()):
+        if key.lower() == "authorization" and key != "Authorization":
+            auth_value = forward_headers.pop(key)
+            forward_headers["Authorization"] = auth_value
+            break
 
     # 不添加 x-forwarded-for，保持与真实 Claude Code CLI 一致
 
